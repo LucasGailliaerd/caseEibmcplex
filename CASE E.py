@@ -13,14 +13,62 @@ SLOTS_3H = [
 ]
 
 # Penalties (Table 9.18)
+import pandas as pd
+
+path = "/mnt/data/Tables_exhibits.xlsx"
+
+# Use row 3 and 4 (0-based) as column headers: "Day x" and "E/D/L/N/F"
+pref_raw = pd.read_excel(
+    path,
+    sheet_name="Department A - Preferences",
+    header=[3, 4],     # row 3 = Day labels, row 4 = E/D/L/N/F
+    index_col=0        # first column = nurse id (301A001, ...)
+)
+
+# Drop the junk rows above the real nurses (NaN or non-IDs)
+pref_raw = pref_raw[pref_raw.index.notna()]
+pref_raw = pref_raw[pref_raw.index.astype(str).str.match(r"\d{3}A\d{3}")]
+
+# Clean day names -> integer day 1..28
+def day_to_int(day_str):
+    # "Day 1 (**)" → 1, "Day 10" → 10, etc.
+    return int(str(day_str).split()[1])
+
+pref_raw.columns = pd.MultiIndex.from_arrays(
+    [
+        [day_to_int(d) for d, _ in pref_raw.columns],  # day
+        [s for _, s in pref_raw.columns]               # shift (E/D/L/N/F)
+    ],
+    names=["day", "shift"]
+)
+
+# Melt to tidy form: one row per (nurse, day, shift)
+pref_long = (
+    pref_raw
+    .stack(["day", "shift"])  # go from wide to long using the MultiIndex columns
+    .reset_index()
+)
+
+pref_long.columns = ["nurse_id", "day", "shift", "score_raw"]
+
+# Fill blanks with 0 and convert to int
+pref_long["score"] = pref_long["score_raw"].fillna(0).astype(int)
+
+preference_score = {
+    (row["nurse_id"], int(row["day"]), row["shift"]): row["score"]
+    for _, row in pref_long.iterrows()
+}
+
+
+
+P_PREFERENCE_WEIGHT = 1  # or whatever scaling you want
 P_SHORTAGE = 100
-P_PREFERENCE_WEIGHT = 1   # preference_score values will be multiplied by this
 P_LEAVE = 100
 P_SURPLUS = 20
 CYCLICAL_PENALTY = 2
 P_FAIRNESS = 5
 
-STANDARD_SHIFTS_PER_WEEK = 6  # for fairness expectation
+STANDARD_SHIFTS_PER_WEEK = 5  # for fairness expectation
 
 # ------------ Required workload per 3h slot (Dept A) - copy from your input ----------
 required_workload_by_day = {
@@ -108,41 +156,47 @@ for (nid, emp, ntype, preftext) in nurse_rows:
         "preferences_text": preftext, "fixed_leaves": fixed_leaves
     })
 
-# ------------ Build preference numeric score (1..9) for each (nurse,day,shift)
-# Lower = better (preferred), 1 strong desired, 5 indifferent, 9 strong aversion, 100 = effectively forbidden
-def build_preference_scores(nurses):
-    pref = {}
-    for n in nurses:
-        txt = n['preferences_text'].lower()
-        for d in DAYS:
-            for s in SLOTS_3H:
-                score = 5  # default indifferent
-                # strong aversion if nurse declared "no early" and this 3h slot is a morning slot (06-12)
-                if "no early" in txt and s in ["06:00-09:00","09:00-12:00"]:
-                    score = 100
-                if "preference for night" in txt or "preference for night shifts" in txt:
-                    if s in ["21:00-24:00","00:00-03:00","03:00-06:00"]:  # treat night blocks as these
-                        score = 1
-                if "preference for early" in txt or "prefers early" in txt:
-                    if s in ["06:00-09:00","09:00-12:00"]:
-                        score = 1
-                if "preference for late" in txt:
-                    if s in ["12:00-15:00","15:00-18:00","18:00-21:00"]:
-                        score = 1
-                if "no weekend" in txt or "no weekend shifts" in txt:
-                    if d in ["Saturday","Sunday"]:
-                        score = 100
-                # specific day-off preferences: heavy penalty if assigned those days
-                if f"preference for {d} day off" in txt or f"preference {d} day off" in txt:
-                    score = 100
-                # weekend day on preference => prefer weekend blocks
-                if "preference for weekend day on" in txt:
-                    if d in ["Saturday","Sunday"]:
-                        score = 1
-                pref[(n['id'], d, s)] = score
-    return pref
+# Preferences
 
-preference_scores = build_preference_scores(nurses)
+DAY_INDEX_TO_WEEKDAY = {
+    1:'Monday',  2:'Tuesday', 3:'Wednesday', 4:'Thursday',
+    5:'Friday',  6:'Saturday',7:'Sunday',
+    8:'Monday',  9:'Tuesday', # etc (mod 7)
+}
+SHIFT_TO_SLOTS = {
+    'E': ["06:00-09:00","09:00-12:00"],                 # early
+    'D': ["09:00-12:00","12:00-15:00","15:00-18:00"],   # day
+    'L': ["12:00-15:00","15:00-18:00","18:00-21:00"],   # late
+    'N': ["21:00-24:00","00:00-03:00","03:00-06:00"],   # night
+    'F': []                                             # free
+}
+# preference_score from Excel: (nurse_id, day_index (1-28), shift_letter) -> score
+DEFAULT_SCORE = 5  # neutral if no info
+
+def build_pref_3h_from_excel(preference_score):
+    pref3h = defaultdict(lambda: DEFAULT_SCORE)
+    
+    # For each Excel cell, spread its score over the relevant 3h blocks
+    for (nid, day_idx, shift), score in preference_score.items():
+        weekday = DAYS[(day_idx - 1) % 7]      # map 1..28 to Monday..Sunday
+        slots = SHIFT_TO_SLOTS.get(shift, [])
+        for slot in slots:
+            key = (nid, weekday, slot)
+            # combine multiple weeks: average or min; I’ll take average
+            # store (sum, count) then divide
+            if key not in pref3h:
+                pref3h[key] = [0,0]
+            pref3h[key][0] += score
+            pref3h[key][1] += 1
+
+    # finalize: convert (sum,count) to mean, keep default when no data
+    final = defaultdict(lambda: DEFAULT_SCORE)
+    for key, (s,c) in pref3h.items():
+        final[key] = s / c
+    return final
+
+preference_scores_3h = build_pref_3h_from_excel(preference_score)
+
 
 # ------------ Utility to print roster nicely ----------
 def print_roster(roster):
@@ -159,7 +213,7 @@ def print_roster(roster):
             print(f"  {nid} -> {s}")
 
 # ------------ Solver helper: build and run a PuLP model for 3h slots ----------
-def solve_3h_roster(nurses, min_coverage, preference_scores,
+def solve_3h_roster(nurses, min_coverage, preference_scores_3h,
                      force_cycle_soft=True, fairness=True, shortage_weight=P_SHORTAGE,
                      lexicographic=False):
     prob = pulp.LpProblem("3h_Roster", pulp.LpMinimize)
@@ -173,8 +227,11 @@ def solve_3h_roster(nurses, min_coverage, preference_scores,
     # Objective: weighted sum
     obj = pulp.lpSum([shortage_weight * short[(d,s)] for d in DAYS for s in SLOTS_3H])
     obj += pulp.lpSum([P_SURPLUS * surp[(d,s)] for d in DAYS for s in SLOTS_3H])
-    obj += pulp.lpSum([P_PREFERENCE_WEIGHT * preference_scores[(n['id'],d,s)] * x[(n['id'],d,s)]
-                       for n in nurses for d in DAYS for s in SLOTS_3H])
+    obj += pulp.lpSum(
+    P_PREFERENCE_WEIGHT * preference_scores_3h.get((n['id'], d, s), 5) * x[(n['id'], d, s)]
+    for n in nurses for d in DAYS for s in SLOTS_3H
+)
+
     # leave violations as big penalties (we already encoded as preference 100 for those)
     if force_cycle_soft:
         obj += CYCLICAL_PENALTY * pulp.lpSum([cycdev[n['id']] for n in nurses])
@@ -261,7 +318,7 @@ def solve_3h_roster(nurses, min_coverage, preference_scores,
 
 # ------------ Option 1: Basic 3h roster (capacity 100) ----------
 print("\n=== OPTION 1: Basic 3-hour block roster (capacity 100) ===")
-roster1, shortages1, surplus1 = solve_3h_roster(nurses, min_coverage_3h, preference_scores,
+roster1, shortages1, surplus1 = solve_3h_roster(nurses, min_coverage_3h, preference_scores_3h,
                                                force_cycle_soft=True, fairness=True, lexicographic=False)
 print_roster(roster1)
 print("\nNon-zero shortages (slot -> shortage):")
@@ -322,7 +379,7 @@ def solve_9h_roster(nurses, mincov_9h, preference_scores_3h):
     for n in nurses:
         for d in DAYS:
             for idx, blocks in cands_9h:
-                pref9[(n['id'],d,idx)] = sum(preference_scores[(n['id'],d,b)] for b in blocks)
+                pref9[(n['id'],d,idx)] = sum(preference_scores_3h[(n['id'],d,b)] for b in blocks)
 
     obj = pulp.lpSum([P_SHORTAGE * short[(d,idx)] for d in DAYS for idx in range(len(cands_9h))])
     obj += pulp.lpSum([P_SURPLUS * surp[(d,idx)] for d in DAYS for idx in range(len(cands_9h))])
@@ -433,7 +490,7 @@ def lexicographic_3h(nurses, min_coverage, preference_scores):
     prob2 += pulp.lpSum([short2[(d,s)] for d in DAYS for s in SLOTS_3H]) <= opt_short
 
     # objective: preferences + surpluses + cycdev + fairness
-    obj2 = pulp.lpSum([P_PREFERENCE_WEIGHT * preference_scores[(n['id'],d,s)] * x2[(n['id'],d,s)] for n in nurses for d in DAYS for s in SLOTS_3H])
+    obj2 = pulp.lpSum([P_PREFERENCE_WEIGHT * preference_scores.get((n['id'], d, s), DEFAULT_SCORE) * x2[(n['id'],d,s)] for n in nurses for d in DAYS for s in SLOTS_3H])
     obj2 += pulp.lpSum([P_SURPLUS * surp2[(d,s)] for d in DAYS for s in SLOTS_3H])
     obj2 += CYCLICAL_PENALTY * pulp.lpSum([cycdev2[n['id']] for n in nurses])
     obj2 += P_FAIRNESS * pulp.lpSum([fairdev2[n['id']] for n in nurses])
@@ -450,7 +507,7 @@ def lexicographic_3h(nurses, min_coverage, preference_scores):
     surplus = {(d,s): int(pulp.value(surp2[(d,s)])) for d in DAYS for s in SLOTS_3H}
     return roster, shortages, surplus
 
-roster_lex, shorts_lex, surp_lex = lexicographic_3h(nurses, min_coverage_3h, preference_scores)
+roster_lex, shorts_lex, surp_lex = lexicographic_3h(nurses, min_coverage_3h, preference_scores_3h)
 print_roster(roster_lex)
 print("\nLex shortages (non-zero):")
 for k,v in shorts_lex.items():
