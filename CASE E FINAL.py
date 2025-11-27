@@ -4,6 +4,8 @@ import random
 import pandas as pd
 from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent
+
 # === CONSTANTS (replace the #define stuff) ===
 NURSES = 100
 DAYS = 30
@@ -293,47 +295,68 @@ def read_personnel_characteristics():
         nurse_percent_employment[k] = float(tokens[p]); p += 1
         nurse_type[k] = int(tokens[p]) - 1; p += 1
 
+def debug_list_sheets():
+    excel_file = BASE_DIR / "CASE_E_input.xlsx"
+    xls = pd.ExcelFile(excel_file)
+    print("Excel file:", excel_file)
+    print("Sheets:", xls.sheet_names)
+
 def read_cyclic_roster():
     """
-    Read the cyclic roster for this department.
-    Debug version: checks token counts and prints diagnostics.
+    Read the cyclic roster for this department from Excel.
+
+    Excel file:
+      - CASE_E_input.xlsx  (must be in the same folder as this .py)
+      - sheet: 'CyclicRoster_<department>', e.g. 'CyclicRoster_A'
+      - columns:
+          NurseType, Day1, Day2, ..., DayN
+      - NurseType = 1,2,... (will be stored internally as 0,1,...)
+      - Day* cells = external shift codes (indices into shift[])
     """
-    global number_nurses, cyclic_roster
+    global number_nurses, number_days, cyclic_roster, nurse_type
 
-    filename = f"Cyclic_roster_dpt_{department}.txt"
+    excel_file = BASE_DIR / "CASE_E_input.xlsx"
+    sheet_name = f"Case_D_Cyclic_{department}"
 
-    with open(filename, "r") as f:
-        content = f.read()
-    tokens = content.split()
+    df = pd.read_excel(excel_file, sheet_name=sheet_name)
 
-    print("---- DEBUG read_cyclic_roster ----")
-    print("Raw token count:", len(tokens))
-
-    if not tokens:
-        raise ValueError("Cyclic roster file is empty")
-
-    p = 0
-    number_nurses = int(tokens[p]); p += 1
-    print("number_nurses from file:", number_nurses)
-    print("number_days in code:", number_days)
-
-    expected_len = 1 + number_nurses * number_days
-    print("expected total tokens:", expected_len)
-
-    if len(tokens) < expected_len:
+    # Check NurseType column
+    if "NurseType" not in df.columns:
         raise ValueError(
-            f"Not enough data in cyclic roster file: "
-            f"have {len(tokens)} tokens, expected at least {expected_len}"
+            f"'NurseType' column missing in sheet {sheet_name} of {excel_file}"
         )
 
-    # if counts are fine, fill the roster
-    for k in range(number_nurses):
-        for i in range(number_days):
-            l = int(tokens[p]); p += 1
-            cyclic_roster[k][i] = shift[l]
+    # All day columns = those starting with "Day"
+    day_cols = [c for c in df.columns if str(c).lower().startswith("day")]
+    if not day_cols:
+        raise ValueError(
+            f"No Day* columns found in sheet {sheet_name} of {excel_file}"
+        )
 
-    print("Cyclic roster read OK.")
-    print("-------------------------------")
+    # Number of days from Excel
+    excel_days = len(day_cols)
+    if number_days != excel_days:
+        print(
+            f"WARNING: number_days in code = {number_days}, "
+            f"but Excel has {excel_days} day columns. "
+            f"Using {excel_days} from Excel."
+        )
+        number_days = excel_days
+
+    # Number of nurses = number of rows
+    number_nurses = len(df)
+
+    # Fill nurse_type and cyclic_roster
+    for k in range(number_nurses):
+        # nurse type: convert 1,2,... to 0-based indices 0,1,...
+        nt_val = int(df.iloc[k]["NurseType"])
+        nurse_type[k] = nt_val - 1
+
+        # day-by-day shift pattern
+        for d_idx, col in enumerate(day_cols):
+            raw_code = int(df.iloc[k][col])   # external code (0,1,2,...)
+            cyclic_roster[k][d_idx] = shift[raw_code]
+
 
 def read_monthly_roster_rules():
     """
@@ -390,6 +413,58 @@ def read_monthly_roster_rules():
             identical[k] = 1
         else:
             identical[k] = 0
+
+
+def read_monthly_roster_from_excel():
+    """
+    Read the monthly roster from Excel and fill monthly_roster.
+
+    Excel:
+      - file: CASE_E_input.xlsx (same folder as this .py)
+      - sheet: 'MonthlyRoster_<department>', e.g. 'MonthlyRoster_A'
+      - columns:
+          NurseID, Day1, Day2, ..., DayN
+      - Day* cells = external shift codes (same numbering as cyclic input)
+    """
+    global monthly_roster, number_nurses, number_days
+
+    excel_file = BASE_DIR / "CASE_E_input.xlsx"
+    sheet_name = f"Case_E_MonthlyRoster_{department}"
+
+    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+
+    # Identify day columns
+    day_cols = [c for c in df.columns if str(c).lower().startswith("day")]
+    if not day_cols:
+        raise ValueError(
+            f"No Day* columns found in sheet {sheet_name} of {excel_file}"
+        )
+
+    excel_days = len(day_cols)
+    if excel_days != number_days:
+        print(
+            f"WARNING: code expects {number_days} days, "
+            f"but Excel monthly roster has {excel_days} days. "
+            f"Using {excel_days} from Excel."
+        )
+        number_days = excel_days
+
+    if len(df) < number_nurses:
+        raise ValueError(
+            f"Monthly roster has only {len(df)} nurses, "
+            f"but number_nurses = {number_nurses} from other input."
+        )
+    if len(df) > number_nurses:
+        print(
+            f"WARNING: Monthly roster has {len(df)} rows but number_nurses = {number_nurses}. "
+            f"Ignoring extra rows."
+        )
+
+    # Fill monthly_roster using internal shift encoding
+    for k in range(number_nurses):
+        for d_idx, col in enumerate(day_cols[:number_days]):
+            external_code = int(df.iloc[k][col])   # external shift index
+            monthly_roster[k][d_idx] = shift[external_code]
 
 def read_input():
     """
@@ -579,11 +654,11 @@ def evaluate_solution():
 def procedure():
     """
     Construct the monthly roster.
-    Currently: dummy example, copy cyclic_roster into monthly_roster.
+
+    Current implementation: read the schedule directly from Excel.
     """
-    for k in range(number_nurses):
-        for i in range(number_days):
-            monthly_roster[k][i] = cyclic_roster[k][i]
+    read_monthly_roster_from_excel()
+
 
 def add_nurse_to_day_shift(nurse_id: int, day_id: int, shift_id: int):
     """
@@ -607,6 +682,8 @@ def main():
     # INITIALISATION
     seed = 1000
     random.seed(seed)
+
+    debug_list_sheets()
 
     # READ INPUT
     read_input()
