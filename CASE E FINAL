@@ -1,0 +1,413 @@
+import math
+import time
+import random
+from pathlib import Path
+
+# === CONSTANTS (replace the #define stuff) ===
+NURSES = 100
+DAYS = 30
+SHIFTS = 5
+TYPES = 2
+
+# === GENERIC PERSONNEL ROSTERING VARIABLES ===
+department: str = ""          # was: char department[10];
+number_days: int = 0          # was: int number_days;
+number_nurses: int = 0        # was: int number_nurses;
+number_shifts: int = 0        # was: int number_shifts;
+shift_code: int = 0           # was: int shift_code;
+
+
+# === VARIABLES SHIFT SYSTEM ===
+# int hrs[SHIFTS];
+hrs = [0 for _ in range(SHIFTS)]
+
+# int req[DAYS][SHIFTS];
+req = [[0 for _ in range(SHIFTS)] for _ in range(DAYS)]
+
+# int shift[SHIFTS];
+shift = [0 for _ in range(SHIFTS)]
+
+# int start_shift[SHIFTS];
+start_shift = [0 for _ in range(SHIFTS)]
+
+# int end_shift[SHIFTS];
+end_shift = [0 for _ in range(SHIFTS)]
+
+length: int = 0
+
+
+# === VARIABLES PERSONNEL CHARACTERISTICS ===
+number_types: int = 0                 # was: int number_types;
+
+# int nurse_type[NURSES];
+nurse_type = [0 for _ in range(NURSES)]
+
+# int pref[NURSES][DAYS][SHIFTS];
+pref = [
+    [
+        [0 for _ in range(SHIFTS)]
+        for _ in range(DAYS)
+    ]
+    for _ in range(NURSES)
+]
+
+# float nurse_percent_employment[NURSES];
+nurse_percent_employment = [0.0 for _ in range(NURSES)]
+
+# std::string personnel_number[NURSES];
+personnel_number = ["" for _ in range(NURSES)]
+
+
+# === VARIABLES PERSONNEL ROSTER ===
+# int cyclic_roster[NURSES][DAYS];
+cyclic_roster = [
+    [0 for _ in range(DAYS)]
+    for _ in range(NURSES)
+]
+
+# int monthly_roster[NURSES][DAYS];
+monthly_roster = [
+    [0 for _ in range(DAYS)]
+    for _ in range(NURSES)
+]
+
+
+# === VARIABLES MONTHLY ROSTER RULES ===
+# int min_ass[NURSES];
+min_ass = [0 for _ in range(NURSES)]
+
+# int max_ass[NURSES];
+max_ass = [0 for _ in range(NURSES)]
+
+weekend: int = 0  # day the weekend starts
+
+# int identical[NURSES];
+identical = [0 for _ in range(NURSES)]
+
+# int max_cons[NURSES][SHIFTS];
+max_cons = [
+    [0 for _ in range(SHIFTS)]
+    for _ in range(NURSES)
+]
+
+# int min_cons[NURSES][SHIFTS];
+min_cons = [
+    [0 for _ in range(SHIFTS)]
+    for _ in range(NURSES)
+]
+
+# int min_shift[NURSES][SHIFTS];
+min_shift = [
+    [0 for _ in range(SHIFTS)]
+    for _ in range(NURSES)
+]
+
+# int max_shift[NURSES][SHIFTS];
+max_shift = [
+    [0 for _ in range(SHIFTS)]
+    for _ in range(NURSES)
+]
+
+# int min_cons_wrk[NURSES];
+min_cons_wrk = [0 for _ in range(NURSES)]
+
+# int max_cons_wrk[NURSES];
+max_cons_wrk = [0 for _ in range(NURSES)]
+
+# int extreme_max_cons[NURSES][SHIFTS];
+extreme_max_cons = [
+    [0 for _ in range(SHIFTS)]
+    for _ in range(NURSES)
+]
+
+# int extreme_min_cons[NURSES][SHIFTS];
+extreme_min_cons = [
+    [0 for _ in range(SHIFTS)]
+    for _ in range(NURSES)
+]
+
+extreme_max_cons_wrk: int = 0
+extreme_min_cons_wrk: int = 0
+
+
+# === EVALUATION VARIABLES ===
+count_ass: int = 0
+count_cons_wrk: int = 0
+count_cons: int = 0
+
+# int count_shift[SHIFTS];
+count_shift = [0 for _ in range(SHIFTS)]
+
+# int scheduled[TYPES][DAYS][SHIFTS];
+scheduled = [
+    [
+        [0 for _ in range(SHIFTS)]
+        for _ in range(DAYS)
+    ]
+    for _ in range(TYPES)
+]
+
+# int violations[DAYS * SHIFTS];
+violations = [0 for _ in range(DAYS * SHIFTS)]
+
+def shift_decoding(shift_code: int) -> int:
+    """
+    Return the index in `shift` that has the given encoded shift_code.
+    If not found, return -1.
+    """
+    for idx in range(number_shifts):
+        if shift[idx] == shift_code:
+            return idx
+    return -1
+
+import os  # at top with the other imports if you want, optional
+
+
+def read_shift_system():
+    """
+    Read the shift system for the current `department` into the global structures.
+
+    Expects a file: files/Shift_system_dpt_<department>.txt
+    Format (same as C++ version expects):
+      - first line: <number_shifts>\t<length>
+      - next `number_shifts` lines: start time (int) of each shift
+      - then: required staff numbers, as integers separated by whitespace
+    """
+    global number_shifts, length, hrs, req, shift, start_shift, end_shift
+
+    # Build filename, same as C++: "files/Shift_system_dpt_" + department + ".txt"
+    filename = f"caseEibmcplex/Shift_system_dpt_{department}.txt"
+    
+
+
+    # Open file
+    with open(filename, "r") as f:
+        # First line: number_shifts and length
+        first_line = f.readline().split()
+        if len(first_line) < 2:
+            raise ValueError("Invalid shift system file header")
+
+        number_shifts = int(first_line[0])
+        length = int(first_line[1])
+
+        # Read start times for the different shifts (1-based indexing)
+        for k in range(1, number_shifts + 1):
+            line = f.readline()
+            if not line:
+                raise ValueError("Not enough start_shift lines in shift file")
+            start_shift[k] = int(line.strip())
+
+        # Read the remaining integers in the file as requirement values
+        req_values: list[int] = []
+        for line in f:
+            parts = line.split()
+            for token in parts:
+                req_values.append(int(token))
+
+    # Now we simulate the fscanf calls that were reading those ints one by one
+    p = 0  # pointer into req_values
+
+    # This C++ code uses i = 0 as "day 0" pattern to copy later
+    i = 0
+
+    # SHIFT ENCODING:
+    # Early  -> code 0
+    # Day    -> code 1
+    # Late   -> code 2
+    # Night  -> code 3
+    # Day off-> code 4 (assigned to shift[0])
+    for k in range(1, number_shifts + 1):
+        start_k = start_shift[k]
+
+        # EARLY (3 <= start < 9)
+        if 3 <= start_k < 9 and req[i][0] == 0:
+            req[i][0] = req_values[p]; p += 1
+            shift[k] = 0
+        elif 3 <= start_k < 9 and req[i][0] != 0:
+            req[i][1] = req_values[p]; p += 1
+            shift[k] = 1
+
+        # DAY (9 <= start < 12)
+        if 9 <= start_k < 12 and req[i][1] == 0:
+            req[i][1] = req_values[p]; p += 1
+            shift[k] = 1
+        elif 9 <= start_k < 12 and req[i][1] != 0:
+            req[i][2] = req_values[p]; p += 1
+            shift[k] = 2
+
+        # LATE (12 <= start < 21)
+        if 12 <= start_k < 21 and req[i][2] == 0:
+            req[i][2] = req_values[p]; p += 1
+            shift[k] = 2
+        elif 12 <= start_k < 21 and req[i][2] != 0:
+            req[i][3] = req_values[p]; p += 1
+            shift[k] = 3
+
+        # NIGHT (start >= 21 or start < 3)
+        if ((start_k >= 21 or start_k < 3) and req[i][3] == 0):
+            req[i][3] = req_values[p]; p += 1
+            shift[k] = 3
+        elif ((start_k >= 21 or start_k < 3) and req[i][3] != 0):
+            print("Read problem shifts input")
+
+    # Day off associated with shift 4
+    shift[0] = 4
+
+    # Determine end times and hrs for each shift
+    for m in range(1, number_shifts + 1):
+        if start_shift[m] + length < 24:
+            hrs[shift[m]] = length
+            end_shift[m] = start_shift[m] + length
+        else:
+            hrs[shift[m]] = length
+            end_shift[m] = hrs[shift[m]] + start_shift[m] - 24
+
+    # Free shift (day off) has zero hours
+    hrs[shift[0]] = 0
+
+    # Copy staffing requirements to the other days
+    # C++: for (i = 1; i < number_days; i++) for (j = 0; j <= number_shifts; j++)
+    for day in range(1, number_days):
+        for j in range(0, number_shifts + 1):  # note +1 because shift[0..number_shifts]
+            req[day][shift[j]] = req[0][shift[j]]
+
+    # Increase number_shifts by one to include the day off as a "shift"
+    number_shifts += 1
+
+def read_personnel_characteristics():
+    """
+    Read preferences and characteristics for all nurses for this department.
+    Mirrors the C++ read_personnel_characteristics().
+    """
+    global number_types, personnel_number, pref, nurse_percent_employment, nurse_type
+
+    filename = f"caseEibmcplex/Personnel_dpt_{department}.txt"
+    number_types = TYPES  # same constant as C++
+
+    with open(filename, "r") as f:
+        tokens = f.read().split()
+
+    p = 0  # pointer into tokens
+
+    for k in range(number_nurses):
+        # Personnel number (string)
+        personnel_number[k] = tokens[p]
+        p += 1
+
+        # Preferences: number_days * 5
+        for i in range(number_days):
+            for j in range(5):  # file always contains 5 shift-pref columns
+                pref[k][i][j] = int(tokens[p])
+                p += 1
+
+        # Percentage of employment and nurse type
+        nurse_percent_employment[k] = float(tokens[p]); p += 1
+        nurse_type[k] = int(tokens[p]) - 1; p += 1
+
+def read_cyclic_roster():
+    """
+    Read the cyclic roster for this department.
+    Mirrors the C++ read_cyclic_roster().
+    """
+    global number_nurses, cyclic_roster
+
+    filename = f"files/Cyclic_roster_dpt_{department}.txt"
+
+    with open(filename, "r") as f:
+        tokens = f.read().split()
+
+    p = 0
+    number_nurses = int(tokens[p]); p += 1
+
+    for k in range(number_nurses):
+        for i in range(number_days):
+            l = int(tokens[p]); p += 1
+            cyclic_roster[k][i] = shift[l]
+
+def read_monthly_roster_rules():
+    """
+    Read monthly roster rules for this department.
+    Mirrors the C++ read_monthly_roster_rules().
+    """
+    global min_ass, max_ass, min_cons_wrk, max_cons_wrk
+    global min_cons, max_cons, extreme_max_cons, extreme_min_cons
+    global min_shift, max_shift, identical
+    global extreme_max_cons_wrk, extreme_min_cons_wrk
+
+    filename = f"caseEibmcplex/Constraints_dpt_{department}.txt"
+
+    for k in range(number_nurses):
+        with open(filename, "r") as f:
+            tokens = f.read().split()
+
+        p = 0
+
+        # min/max assignments over whole period
+        min_ass[k] = int(tokens[p]); p += 1
+        max_ass[k] = int(tokens[p]); p += 1
+
+        # scale by employment fraction (mimic C++ int *= float truncation)
+        min_ass[k] = int(min_ass[k] * nurse_percent_employment[k])
+        max_ass[k] = int(max_ass[k] * nurse_percent_employment[k])
+
+        # min/max consecutive work days
+        min_cons_wrk[k] = int(tokens[p]); p += 1
+        max_cons_wrk[k] = int(tokens[p]); p += 1
+
+        extreme_max_cons_wrk = 10
+        extreme_min_cons_wrk = 1
+
+        # per-shift-type consecutive work day constraints
+        for i in range(1, number_shifts):
+            h1 = int(tokens[p]); p += 1
+            h2 = int(tokens[p]); p += 1
+            sh = shift[i]
+            min_cons[k][sh] = h1
+            max_cons[k][sh] = h2
+            extreme_max_cons[k][sh] = 10
+            extreme_min_cons[k][sh] = 1
+
+        # min/max assignments per shift type over the whole period
+        for i in range(1, number_shifts):
+            sh = shift[i]
+            min_shift[k][sh] = int(tokens[p]); p += 1
+            max_shift[k][sh] = int(tokens[p]); p += 1
+
+        # identical weekend constraint
+        identical_string = tokens[p]  # e.g. "Y" or "N"
+        if identical_string[0].upper() == "Y":
+            identical[k] = 1
+        else:
+            identical[k] = 0
+
+
+def main():
+    global department, number_days
+
+    department = "A"          # or whatever matches your file names
+    number_days = DAYS        # usually 28 or 30 depending on your data
+
+    start_time = time.perf_counter()
+
+    # 1) read shift system (fills shift[], hrs[], req, etc.)
+    read_shift_system()
+
+    # 2) read cyclic roster (uses shift[] and sets number_nurses)
+    read_cyclic_roster()
+
+    # 3) read personnel characteristics (needs number_nurses, number_days)
+    read_personnel_characteristics()
+
+    # 4) read monthly roster rules (needs number_nurses, number_shifts, nurse_percent_employment, shift)
+    read_monthly_roster_rules()
+
+    elapsed_time = time.perf_counter() - start_time
+    print(f"Done reading inputs. number_nurses={number_nurses}, number_shifts={number_shifts}")
+    print(f"Elapsed time: {elapsed_time:.6f} seconds")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
