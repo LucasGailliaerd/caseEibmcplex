@@ -265,35 +265,70 @@ def read_shift_system():
     # Include day off as an extra shift
     number_shifts += 1
 
+import pandas as pd
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent  # should already exist
+
+
 def read_personnel_characteristics():
     """
-    Read preferences and characteristics for all nurses for this department.
-    Mirrors the C++ read_personnel_characteristics().
+    Read nurse preferences, employment, and type from Excel instead of txt.
+
+    Excel file:
+      - CASE_E_input.xlsx
+      - sheet: 'Personnel_A' (for department 'A')
+      - NO HEADER ROW
+      - Each row:
+          col0: Personnel Number (string)
+          col1..col(1+5*number_days-1):  preference ints (flattened: day 1 shift0..4, day 2 shift0..4, ...)
+          next col: employment (float, e.g. 1.00)
+          next col: type (1 or 2, will be stored as 0 or 1 internally)
     """
-    global number_types, personnel_number, pref, nurse_percent_employment, nurse_type
+    global number_types, personnel_number, pref, nurse_percent_employment, nurse_type, number_nurses, number_days
 
-    filename = f"Personnel_dpt_{department}.txt"
-    number_types = TYPES  # same constant as C++
+    excel_file = BASE_DIR / "CASE_E_input.xlsx"
+    sheet_name = f"Case_E_Preferences_{department}"
 
-    with open(filename, "r") as f:
-        tokens = f.read().split()
+    # header=None -> no header row, all rows are pure data
+    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
 
-    p = 0  # pointer into tokens
+    number_types = TYPES
+
+    # Number of nurses = number of rows
+    number_nurses = len(df)
+
+    # total prefs per nurse = 5 * number_days
+    prefs_per_nurse = 5 * number_days
 
     for k in range(number_nurses):
-        # Personnel number (string)
-        personnel_number[k] = tokens[p]
-        p += 1
+        row = df.iloc[k]
 
-        # Preferences: number_days * 5
-        for i in range(number_days):
-            for j in range(5):  # file always contains 5 shift-pref columns
-                pref[k][i][j] = int(tokens[p])
-                p += 1
+        # 0: personnel number
+        personnel_number[k] = str(row.iloc[0])
 
-        # Percentage of employment and nurse type
-        nurse_percent_employment[k] = float(tokens[p]); p += 1
-        nurse_type[k] = int(tokens[p]) - 1; p += 1
+        # 1..prefs_per_nurse: flattened preferences
+        pref_values = row.iloc[1 : 1 + prefs_per_nurse].tolist()
+
+        if len(pref_values) != prefs_per_nurse:
+            raise ValueError(
+                f"Row {k} in Personnel sheet has {len(pref_values)} preference values, "
+                f"expected {prefs_per_nurse}."
+            )
+
+        idx = 0
+        for day in range(number_days):
+            for s in range(5):  # 5 shift types
+                pref[k][day][s] = int(pref_values[idx])
+                idx += 1
+
+        # employment and type
+        employment_col = 1 + prefs_per_nurse
+        type_col = employment_col + 1
+
+        nurse_percent_employment[k] = float(row.iloc[employment_col])
+        nurse_type[k] = int(row.iloc[type_col]) - 1  # make it 0 or 1 internally
+
 
 def debug_list_sheets():
     excel_file = BASE_DIR / "CASE_E_input.xlsx"
@@ -348,14 +383,12 @@ def read_cyclic_roster():
 
     # Fill nurse_type and cyclic_roster
     for k in range(number_nurses):
-        # nurse type: convert 1,2,... to 0-based indices 0,1,...
         nt_val = int(df.iloc[k]["NurseType"])
-        nurse_type[k] = nt_val - 1
+        nurse_type[k] = nt_val - 1  # type 1/2 -> 0/1
 
-        # day-by-day shift pattern
         for d_idx, col in enumerate(day_cols):
-            raw_code = int(df.iloc[k][col])   # external code (0,1,2,...)
-            cyclic_roster[k][d_idx] = shift[raw_code]
+            code = int(df.iloc[k][col])      # 0=E,1=D,2=L,3=N,4=F
+            cyclic_roster[k][d_idx] = code   # already internal encoding
 
 
 def read_monthly_roster_rules():
@@ -462,9 +495,10 @@ def read_monthly_roster_from_excel():
 
     # Fill monthly_roster using internal shift encoding
     for k in range(number_nurses):
-        for d_idx, col in enumerate(day_cols[:number_days]):
-            external_code = int(df.iloc[k][col])   # external shift index
-            monthly_roster[k][d_idx] = shift[external_code]
+        for d_idx, col in enumerate(day_cols):
+            code = int(df.iloc[k][col])        # 0..4 = E,D,L,N,F
+            monthly_roster[k][d_idx] = code    # store directly
+
 
 def read_input():
     """
