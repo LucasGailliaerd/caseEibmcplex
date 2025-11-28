@@ -298,13 +298,22 @@ def read_personnel_characteristics():
     excel_file = BASE_DIR / "CASE_E_input.xlsx"
     sheet_name = f"Case_E_Preferences_{department}"
 
-    # header=None -> no header row, all rows are pure data
-    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+    n_prefs = len(df)
+
+
+    if number_nurses != 0 and n_prefs != number_nurses:
+        raise ValueError(
+        f"Inconsistent nurse count: cyclic roster has {number_nurses}, "
+        f"preferences have {n_prefs}."
+    )
+
+    number_nurses = n_prefs
+
 
     number_types = TYPES
 
-    # Number of nurses = number of rows
-    number_nurses = len(df)
+    
 
     # total prefs per nurse = 5 * number_days
     prefs_per_nurse = 5 * number_days
@@ -362,6 +371,17 @@ def read_cyclic_roster():
     sheet_name = f"Case_D_Cyclic_{department}"
 
     df = pd.read_excel(excel_file, sheet_name=sheet_name)
+    n_cyc = len(df)
+
+    
+    if number_nurses != 0 and n_cyc != number_nurses:
+        raise ValueError(
+            f"Inconsistent nurse count: previous input had {number_nurses}, "
+            f"cyclic roster has {n_cyc}."
+        )
+
+    number_nurses = n_cyc
+
 
     # Check NurseType column
     if "NurseType" not in df.columns:
@@ -386,8 +406,6 @@ def read_cyclic_roster():
         )
         number_days = excel_days
 
-    # Number of nurses = number of rows
-    number_nurses = len(df)
 
     # Fill nurse_type and cyclic_roster
     for k in range(number_nurses):
@@ -604,6 +622,20 @@ def read_monthly_roster_from_excel():
 
     df = pd.read_excel(excel_file, sheet_name=sheet_name)
 
+ 
+
+    # OPTIONAL: check that Personnel Number order matches preferences
+    if "Personnel Number" in df.columns:
+        for k in range(min(number_nurses, len(df))):
+            roster_id = str(df.iloc[k]["Personnel Number"])
+            if roster_id != personnel_number[k]:
+                raise ValueError(
+                    f"Mismatch between preferences and monthly roster at row {k}: "
+                    f"prefs PN = {personnel_number[k]}, roster PN = {roster_id}"
+                )
+
+
+
     # Identify day columns
     day_cols = [c for c in df.columns if str(c).lower().startswith("day")]
     if not day_cols:
@@ -645,15 +677,7 @@ def read_input():
     """
     global cyclic_roster, number_shifts
 
-    # 1) shift system
     read_shift_system()
-
-    # 2) initialise cyclic roster to 0
-    for k in range(number_nurses):
-        for i in range(number_days):
-            cyclic_roster[k][i] = 0
-
-    # 3) read the other input files
     read_cyclic_roster()
     read_personnel_characteristics()
     read_monthly_roster_constraints()
@@ -671,13 +695,12 @@ def print_output():
 
     with open(txt_filename, "w") as f:
         for k in range(number_nurses):
-            # personnel number
             f.write(f"{personnel_number[k]}\t")
-            # daily shifts
             for i in range(number_days):
-                shift_index = shift_decoding(monthly_roster[k][i])
-                f.write(f"{shift_index}\t")
+                code = monthly_roster[k][i]  # 0..4 = E,D,L,N,F
+                f.write(f"{code}\t")
             f.write("\n")
+
 
     print(f"Monthly roster written to {txt_filename}")
 
