@@ -6,6 +6,8 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 
+SHIFT_LABELS = {0: "E", 1: "D", 2: "L", 3: "N", 4: "F"}
+
 # === CONSTANTS (replace the #define stuff) ===
 NURSES = 100
 DAYS = 30
@@ -165,105 +167,111 @@ def shift_decoding(shift_code: int) -> int:
 
 import os  # at top with the other imports if you want, optional
 
+def _find_cell_containing(df, text):
+    """
+    Return (row, col) of the first cell whose string contains 'text'
+    (case-insensitive).
+    """
+    target = text.upper()
+    for r in range(df.shape[0]):
+        for c in range(df.shape[1]):
+            val = df.iat[r, c]
+            if isinstance(val, str) and target in val.strip().upper():
+                return r, c
+    raise ValueError(f"Cell containing '{text}' not found in shift system sheet")
+
 
 def read_shift_system():
     """
-    Read the shift system for the current `department` into the global structures.
+    Read the shift system for department A from the 'Case_E_Manual' sheet.
 
-    Expects a file: files/Shift_system_dpt_<department>.txt
-    Format (same as C++ version expects):
-      - first line: <number_shifts>\t<length>
-      - next `number_shifts` lines: start time (int) of each shift
-      - then: required staff numbers, as integers separated by whitespace
+    Expected layout (simplified):
+
+        A1: 'Number of shifts'     B1: 'Duration (in h)'
+        A2: <num_shifts>          B2: <length>
+
+        row ~4: 'Start shifts Dep A' | 'Start shifts Dep B' | ...
+
+        below that (num_shifts rows): start hours for each shift, per dep
+
+        row ~11: 'Requirements Dep A' | 'Requirements Dep B' | ...
+
+        below that (num_shifts rows): required nurses per shift, per dep
+
+    Internal encoding:
+        0 = Early (E)   3 <= start < 9
+        1 = Day   (D)   9 <= start < 12
+        2 = Late  (L)   12 <= start < 21
+        3 = Night (N)   start >= 21 or start < 3
+        4 = Free  (F)
     """
-    global number_shifts, length, hrs, req, shift, start_shift, end_shift
+    global number_shifts, length, hrs, req, shift, start_shift, end_shift, number_days
 
-    # Build filename, same as C++: "files/Shift_system_dpt_" + department + ".txt"
-    filename = f"Shift_system_dpt_{department}.txt"
-    
+    excel_file = BASE_DIR / "CASE_E_input.xlsx"
+    sheet_name = "Case_C_9"   # adjust if your sheet has a different name
 
+    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
 
-    with open(filename, "r") as f:
-        tokens = f.read().split()   # split on ANY whitespace
+    # ---- Number of shifts and length ----
+    number_shifts = int(df.iat[1, 0])  # A2
+    length = int(df.iat[1, 1])         # B2
 
-    p = 0  # pointer in tokens
+    # ---- Find 'Start shifts Dep A' and 'Requirements Dep A' headers ----
+    r_start, c_start = _find_cell_containing(df, "START SHIFTS DEP A")
+    r_req, c_req = _find_cell_containing(df, "REQUIREMENTS DEP A")
 
-    # number_shifts and length
-    number_shifts = int(tokens[p]); p += 1
-    length = int(tokens[p]); p += 1
+    # The next 'number_shifts' rows after these headers contain numeric data
+    start_rows = [r_start + 1 + i for i in range(number_shifts)]
+    req_rows = [r_req + 1 + i for i in range(number_shifts)]
 
-    # start times for the different shifts (1-based indexing like C++)
-    for k in range(1, number_shifts + 1):
-        start_shift[k] = int(tokens[p]); p += 1
+    # Reset requirements for day 0
+    for j in range(SHIFTS):  # 0..4
+        req[0][j] = 0
 
-    # the remaining ints are the requirements (what C++ read with those fscanf("%d\t",...) calls)
-    req_values = list(map(int, tokens[p:]))
-    q = 0  # pointer in req_values
+    # ---- Process each real shift (E/D/L) ----
+    for idx in range(number_shifts):
+        row_start = start_rows[idx]
+        row_req = req_rows[idx]
 
-    i = 0  # day 0 pattern
+        start_h = int(df.iat[row_start, c_start])
+        required = int(df.iat[row_req, c_req])
 
-    # SHIFT ENCODING:
-    # Early  -> code 0
-    # Day    -> code 1
-    # Late   -> code 2
-    # Night  -> code 3
-    # Day off-> code 4 (assigned to shift[0])
-    for k in range(1, number_shifts + 1):
-        start_k = start_shift[k]
+        # 1-based index for compatibility with old arrays
+        k = idx + 1
+        start_shift[k] = start_h
 
-        # EARLY (3 <= start < 9)
-        if 3 <= start_k < 9 and req[i][0] == 0:
-            req[i][0] = req_values[q]; q += 1
-            shift[k] = 0
-        elif 3 <= start_k < 9 and req[i][0] != 0:
-            req[i][1] = req_values[q]; q += 1
-            shift[k] = 1
-
-        # DAY (9 <= start < 12)
-        if 9 <= start_k < 12 and req[i][1] == 0:
-            req[i][1] = req_values[q]; q += 1
-            shift[k] = 1
-        elif 9 <= start_k < 12 and req[i][1] != 0:
-            req[i][2] = req_values[q]; q += 1
-            shift[k] = 2
-
-        # LATE (12 <= start < 21)
-        if 12 <= start_k < 21 and req[i][2] == 0:
-            req[i][2] = req_values[q]; q += 1
-            shift[k] = 2
-        elif 12 <= start_k < 21 and req[i][2] != 0:
-            req[i][3] = req_values[q]; q += 1
-            shift[k] = 3
-
-        # NIGHT (start >= 21 or start < 3)
-        if ((start_k >= 21 or start_k < 3) and req[i][3] == 0):
-            req[i][3] = req_values[q]; q += 1
-            shift[k] = 3
-        elif ((start_k >= 21 or start_k < 3) and req[i][3] != 0):
-            print("Read problem shifts input")
-
-    # Day off associated with shift 4
-    shift[0] = 4
-
-    # Determine end times and hrs for each shift
-    for m in range(1, number_shifts + 1):
-        if start_shift[m] + length < 24:
-            hrs[shift[m]] = length
-            end_shift[m] = start_shift[m] + length
+        # decide internal code from start hour
+        if 3 <= start_h < 9:
+            code = 0  # Early
+        elif 9 <= start_h < 12:
+            code = 1  # Day
+        elif 12 <= start_h < 21:
+            code = 2  # Late
         else:
-            hrs[shift[m]] = length
-            end_shift[m] = hrs[shift[m]] + start_shift[m] - 24
+            code = 3  # Night
 
-    # Free shift (day off) has zero hours
-    hrs[shift[0]] = 0
+        shift[k] = code
+        hrs[code] = length
+        req[0][code] = required
 
-    # Copy staffing requirements to the other days
+        # compute end time
+        if start_h + length < 24:
+            end_shift[k] = start_h + length
+        else:
+            end_shift[k] = start_h + length - 24
+
+    # ---- Free shift (code 4) ----
+    shift[0] = 4
+    hrs[4] = 0  # F has no hours
+
+    # ---- Copy requirements to all days ----
     for day in range(1, number_days):
-        for j in range(0, number_shifts + 1):  # j=0..number_shifts, using shift[j]
-            req[day][shift[j]] = req[0][shift[j]]
+        for j in range(SHIFTS):
+            req[day][j] = req[0][j]
 
-    # Include day off as an extra shift
-    number_shifts += 1
+    # We now have 5 shifts in the algorithm: E, D, L, N, F
+    number_shifts = 5
+
 
 import pandas as pd
 from pathlib import Path
@@ -391,61 +399,191 @@ def read_cyclic_roster():
             cyclic_roster[k][d_idx] = code   # already internal encoding
 
 
-def read_monthly_roster_rules():
+def _find_row_starting_with(df, text):
+    """Return row index where column 0 starts with 'text' (case-insensitive)."""
+    target = text.upper()
+    for r in range(df.shape[0]):
+        val = df.iat[r, 0]
+        if isinstance(val, str) and val.strip().upper().startswith(target):
+            return r
+    raise ValueError(f"Row with label starting '{text}' not found in constraints sheet")
+
+
+def _find_col_with_label(df, row_idx, label):
+    """Return column index in row 'row_idx' whose cell matches 'label' (case-insensitive)."""
+    target = label.upper()
+    for c in range(df.shape[1]):
+        val = df.iat[row_idx, c]
+        if isinstance(val, str) and val.strip().upper().startswith(target):
+            return c
+    raise ValueError(f"Column with label '{label}' not found in row {row_idx}")
+
+
+def read_monthly_roster_constraints():
     """
-    Read monthly roster rules for this department.
-    Mirrors the C++ read_monthly_roster_rules().
+    Read monthly roster constraints for Case E, Department A from the
+    'Case_E_Constraints_A' sheet with layout:
+
+    DEPARTMENT A
+    NUMBER OF ASSIGNMENTS
+      Minimum  Maximum
+      0        20
+
+    NUMBER OF CONSECUTIVE ASSIGNMENTS
+      Minimum  Maximum
+      1        6
+
+    NUMBER OF CONSECUTIVE ASSIGNMENTS PER SHIFT TYPE
+      Minimum  Maximum
+      1        6
+      1        6
+      1        28
+
+    NUMBER OF ASSIGNMENTS PER SHIFT TYPE
+      Minimum  Maximum
+      0        12
+      0        12
+      0        12
+
+    IDENTICAL WEEKEND CONSTRAINT
+      NO
     """
     global min_ass, max_ass, min_cons_wrk, max_cons_wrk
     global min_cons, max_cons, extreme_max_cons, extreme_min_cons
     global min_shift, max_shift, identical
     global extreme_max_cons_wrk, extreme_min_cons_wrk
 
-    filename = f"Constraints_dpt_{department}.txt"
+    excel_file = BASE_DIR / "CASE_E_input.xlsx"
+    sheet_name = "Case_E_Constraints_A"
 
+    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+
+    # ----- NUMBER OF ASSIGNMENTS -----
+    r_ass = _find_row_starting_with(df, "NUMBER OF ASSIGNMENTS")
+    header_row_ass = r_ass + 1
+    val_row_ass = header_row_ass + 1
+
+    min_col = _find_col_with_label(df, header_row_ass, "Minimum")
+    max_col = _find_col_with_label(df, header_row_ass, "Maximum")
+
+    base_min_ass = int(df.iat[val_row_ass, min_col])
+    base_max_ass = int(df.iat[val_row_ass, max_col])
+
+    # ----- NUMBER OF CONSECUTIVE ASSIGNMENTS (GLOBAL) -----
+    r_cons = _find_row_starting_with(df, "NUMBER OF CONSECUTIVE ASSIGNMENTS")
+    # ensure we don't pick the "PER SHIFT TYPE" block
+    for r in range(r_cons, df.shape[0]):
+        val = df.iat[r, 0]
+        if isinstance(val, str):
+            txt = val.upper()
+            if "NUMBER OF CONSECUTIVE ASSIGNMENTS" in txt and "PER SHIFT TYPE" not in txt:
+                r_cons = r
+                break
+
+    header_row_cons = r_cons + 1
+    val_row_cons = header_row_cons + 1
+
+    min_col_cons = _find_col_with_label(df, header_row_cons, "Minimum")
+    max_col_cons = _find_col_with_label(df, header_row_cons, "Maximum")
+
+    base_min_cons_wrk = int(df.iat[val_row_cons, min_col_cons])
+    base_max_cons_wrk = int(df.iat[val_row_cons, max_col_cons])
+
+    # ----- CONSECUTIVE ASSIGNMENTS PER SHIFT TYPE -----
+    r_cons_sh = _find_row_starting_with(df, "NUMBER OF CONSECUTIVE ASSIGNMENTS PER SHIFT TYPE")
+    header_row_cons_sh = r_cons_sh + 1
+    first_val_row_cons_sh = header_row_cons_sh + 1
+
+    min_col_cons_sh = _find_col_with_label(df, header_row_cons_sh, "Minimum")
+    max_col_cons_sh = _find_col_with_label(df, header_row_cons_sh, "Maximum")
+
+    base_min_cons = {}
+    base_max_cons = {}
+
+    # collect all consecutive non-empty rows in that block
+    sh = 0
+    r = first_val_row_cons_sh
+    while r < df.shape[0]:
+        val_min = df.iat[r, min_col_cons_sh]
+        val_max = df.iat[r, max_col_cons_sh]
+        if (isinstance(val_min, float) or isinstance(val_min, int)) and not pd.isna(val_min):
+            base_min_cons[sh] = int(val_min)
+            base_max_cons[sh] = int(val_max)
+            sh += 1
+            r += 1
+        else:
+            break
+    num_working_shifts = sh  # for dept A this will be 3 (E,D,L)
+
+    # ----- ASSIGNMENTS PER SHIFT TYPE -----
+    r_ass_sh = _find_row_starting_with(df, "NUMBER OF ASSIGNMENTS PER SHIFT TYPE")
+    header_row_ass_sh = r_ass_sh + 1
+    first_val_row_ass_sh = header_row_ass_sh + 1
+
+    min_col_ass_sh = _find_col_with_label(df, header_row_ass_sh, "Minimum")
+    max_col_ass_sh = _find_col_with_label(df, header_row_ass_sh, "Maximum")
+
+    base_min_shift = {}
+    base_max_shift = {}
+
+    sh = 0
+    r = first_val_row_ass_sh
+    while r < df.shape[0] and sh < num_working_shifts:
+        val_min = df.iat[r, min_col_ass_sh]
+        val_max = df.iat[r, max_col_ass_sh]
+        if (isinstance(val_min, float) or isinstance(val_min, int)) and not pd.isna(val_min):
+            base_min_shift[sh] = int(val_min)
+            base_max_shift[sh] = int(val_max)
+            sh += 1
+            r += 1
+        else:
+            break
+
+    # ----- IDENTICAL WEEKEND CONSTRAINT -----
+    r_ident = _find_row_starting_with(df, "IDENTICAL WEEKEND CONSTRAINT")
+    val_row_ident = r_ident + 1
+
+    ident_value = None
+    for c in range(df.shape[1]):
+        cell = df.iat[val_row_ident, c]
+        if isinstance(cell, str) and cell.strip():
+            ident_value = cell.strip().upper()
+            break
+    ident_flag = 1 if (ident_value and ident_value.startswith("Y")) else 0
+
+    # ----- APPLY TO ALL NURSES -----
     for k in range(number_nurses):
-        with open(filename, "r") as f:
-            tokens = f.read().split()
+        # total assignments (scaled by employment rate)
+        min_ass[k] = int(base_min_ass * nurse_percent_employment[k])
+        max_ass[k] = int(base_max_ass * nurse_percent_employment[k])
 
-        p = 0
-
-        # min/max assignments over whole period
-        min_ass[k] = int(tokens[p]); p += 1
-        max_ass[k] = int(tokens[p]); p += 1
-
-        # scale by employment fraction (mimic C++ int *= float truncation)
-        min_ass[k] = int(min_ass[k] * nurse_percent_employment[k])
-        max_ass[k] = int(max_ass[k] * nurse_percent_employment[k])
-
-        # min/max consecutive work days
-        min_cons_wrk[k] = int(tokens[p]); p += 1
-        max_cons_wrk[k] = int(tokens[p]); p += 1
-
+        # global consecutive working days
+        min_cons_wrk[k] = base_min_cons_wrk
+        max_cons_wrk[k] = base_max_cons_wrk
         extreme_max_cons_wrk = 10
         extreme_min_cons_wrk = 1
 
-        # per-shift-type consecutive work day constraints
-        for i in range(1, number_shifts):
-            h1 = int(tokens[p]); p += 1
-            h2 = int(tokens[p]); p += 1
-            sh = shift[i]
-            min_cons[k][sh] = h1
-            max_cons[k][sh] = h2
+        # per-shift rules for the working shifts we actually have (0..num_working_shifts-1)
+        for sh in range(num_working_shifts):
+            min_cons[k][sh] = base_min_cons[sh]
+            max_cons[k][sh] = base_max_cons[sh]
             extreme_max_cons[k][sh] = 10
             extreme_min_cons[k][sh] = 1
 
-        # min/max assignments per shift type over the whole period
-        for i in range(1, number_shifts):
-            sh = shift[i]
-            min_shift[k][sh] = int(tokens[p]); p += 1
-            max_shift[k][sh] = int(tokens[p]); p += 1
+            min_shift[k][sh] = base_min_shift[sh]
+            max_shift[k][sh] = base_max_shift[sh]
 
-        # identical weekend constraint
-        identical_string = tokens[p]  # e.g. "Y" or "N"
-        if identical_string[0].upper() == "Y":
-            identical[k] = 1
-        else:
-            identical[k] = 0
+        # for any remaining shifts (night, free, etc.): no requirements
+        for sh in range(num_working_shifts, SHIFTS):
+            min_cons[k][sh] = 0
+            max_cons[k][sh] = 0
+            extreme_max_cons[k][sh] = 10
+            extreme_min_cons[k][sh] = 1
+            min_shift[k][sh] = 0
+            max_shift[k][sh] = 9999
+
+        identical[k] = ident_flag
+
 
 
 def read_monthly_roster_from_excel():
@@ -518,7 +656,7 @@ def read_input():
     # 3) read the other input files
     read_cyclic_roster()
     read_personnel_characteristics()
-    read_monthly_roster_rules()
+    read_monthly_roster_constraints()
 
     # 4) force number of shifts in algorithm to 5 (E, D, L, N, off)
     number_shifts = 5
@@ -529,9 +667,9 @@ def print_output():
     Print the monthly roster in the student's original shift numbering.
     Equivalent of C++ print_output().
     """
-    filename = f"Monthly_Roster_dpt_{department}.txt"
+    txt_filename = f"Monthly_Roster_dpt_{department}.txt"
 
-    with open(filename, "w") as f:
+    with open(txt_filename, "w") as f:
         for k in range(number_nurses):
             # personnel number
             f.write(f"{personnel_number[k]}\t")
@@ -540,6 +678,25 @@ def print_output():
                 shift_index = shift_decoding(monthly_roster[k][i])
                 f.write(f"{shift_index}\t")
             f.write("\n")
+
+    print(f"Monthly roster written to {txt_filename}")
+
+    #-----Excel output-----
+
+    data = {}
+    data["Personnel Number"] = [personnel_number[k] for k in range(number_nurses)]
+
+    for d in range(number_days):
+        colname = f"Day{d+1}"
+        col = []
+        for k in range(number_nurses):
+            code = monthly_roster[k][d]
+            col.append(SHIFT_LABELS.get(code, code))
+        data[colname] = col
+
+    df = pd.DataFrame(data)
+    return df
+
 
 def evaluate_line_of_work(nurse_idx: int, slack_j: int = 0):
     """
@@ -624,28 +781,30 @@ def evaluate_line_of_work(nurse_idx: int, slack_j: int = 0):
 
 def evaluate_solution():
     """
-    Evaluate the full personnel schedule and write violation report.
-    Equivalent of C++ evaluate_solution().
+    Evaluate the current monthly_roster:
+
+      - Reset counters
+      - Call evaluate_line_of_work() for each nurse
+      - Write txt violations report
+      - Return (df_summary, df_staffing) for Excel output
     """
-    global scheduled, violations
-
-    filename = f"Violations_dpt_{department}.txt"
-
-    # reset scheduled counts
+    # Reset scheduled and violations
     for kk in range(number_types):
-        for i in range(number_days):
-            for j in range(number_shifts):
-                scheduled[kk][i][j] = 0
+        for day in range(number_days):
+            for sh in range(number_shifts):
+                scheduled[kk][day][sh] = 0
 
-    # reset violations (first 20 entries)
-    for i in range(20):
-        violations[i] = 0
+    for idx in range(20):
+        violations[idx] = 0
 
-    # evaluate each nurse's line of work
-    for i in range(number_nurses):
-        evaluate_line_of_work(i, slack_j=0)
+    # Evaluate each nurse (uses global i inside evaluate_line_of_work)
+    for nurse_idx in range(number_nurses):
+        evaluate_line_of_work(nurse_idx)
 
-    with open(filename, "w") as f:
+
+    # ---------- TXT OUTPUT ----------
+    txt_filename = BASE_DIR / f"Violations_dpt_{department}.txt"
+    with open(txt_filename, "w") as f:
         f.write(f"The total preference score is {violations[0]}.\n")
         f.write(
             "The constraint 'maximum number of consecutive working days' "
@@ -665,25 +824,51 @@ def evaluate_solution():
         )
 
         f.write("The staffing requirements are violated as follows:\n")
-        for i in range(number_days):
-            # last shift (day off) is usually excluded: 0..number_shifts-2
-            for j in range(number_shifts - 1):
-                a = 0
-                for kk in range(number_types):
-                    a += scheduled[kk][i][j]
-
-                shift_index = shift_decoding(j)  # original shift index used in input
-
-                if a < req[i][j]:
+        for day in range(number_days):
+            for sh in range(number_shifts - 1):  # ignore free shift
+                total_scheduled = sum(scheduled[kk][day][sh] for kk in range(number_types))
+                required = req[day][sh]
+                if total_scheduled < required:
                     f.write(
-                        f"There are too few nurses in shift {shift_index} on day {i}: "
-                        f"{a} < {req[i][j]}.\n"
+                        f"There are too few nurses in shift {sh} on day {day+1}: "
+                        f"{total_scheduled} < {required}.\n"
                     )
-                elif a > req[i][j]:
+                elif total_scheduled > required:
                     f.write(
-                        f"There are too many nurses in shift {shift_index} on day {i}: "
-                        f"{a} > {req[i][j]}.\n"
+                        f"There are too many nurses in shift {sh} on day {day+1}: "
+                        f"{total_scheduled} > {required}.\n"
                     )
+
+    print(f"Violations txt written to {txt_filename}")
+
+    # ---------- SUMMARY DATAFRAME ----------
+    df_summary = pd.DataFrame([{
+        "TotalPreferenceScore": violations[0],
+        "MaxConsWorkViol": violations[1],
+        "MaxConsShiftViol": violations[2],
+        "MinAssignViol": violations[3],
+        "MaxAssignViol": violations[4],
+    }])
+
+    # ---------- STAFFING VIOLATIONS DATAFRAME ----------
+    staffing_rows = []
+    for day in range(number_days):
+        for sh in range(number_shifts - 1):  # ignore free shift
+            total_scheduled = sum(scheduled[kk][day][sh] for kk in range(number_types))
+            required = req[day][sh]
+            if total_scheduled != required:
+                staffing_rows.append({
+                    "Day": day + 1,
+                    "ShiftCode": sh,
+                    "ShiftLabel": SHIFT_LABELS.get(sh, sh),
+                    "Scheduled": total_scheduled,
+                    "Required": required,
+                    "Diff": total_scheduled - required,
+                })
+
+    df_staffing = pd.DataFrame(staffing_rows)
+    return df_summary, df_staffing
+
 
 def procedure():
     """
@@ -728,13 +913,20 @@ def main():
     elapsed_time = time.perf_counter() - start_time
     print(f"CPU time for procedure(): {elapsed_time:.6f} seconds")
 
-    # OUTPUT monthly roster
-    print_output()
+    # 1) TXT + DataFrame for monthly roster
+    df_roster = print_output()
 
-    # EVALUATE solution
-    evaluate_solution()
-    print("Evaluation written to Violations_dpt_*.txt")
+    # 2) TXT + DataFrames for evaluation
+    df_summary, df_staffing = evaluate_solution()
 
+    # 3) Write everything into ONE Excel file with multiple sheets
+    output_file = BASE_DIR / f"CASE_E_output_{department}.xlsx"
+    with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+        df_roster.to_excel(writer, sheet_name="MonthlyRoster", index=False)
+        df_summary.to_excel(writer, sheet_name="Summary", index=False)
+        df_staffing.to_excel(writer, sheet_name="StaffingViolations", index=False)
+
+    print(f"\nExcel output written to: {output_file}")
 
 if __name__ == "__main__":
     main()
