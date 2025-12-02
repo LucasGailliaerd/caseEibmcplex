@@ -3,10 +3,25 @@ import time
 import random
 import pandas as pd
 from pathlib import Path
+from copy import deepcopy
+
 
 BASE_DIR = Path(__file__).resolve().parent
 
 SHIFT_LABELS = {0: "E", 1: "D", 2: "L", 3: "N", 4: "F"}
+# Weights for objective (tune later if needed)
+W_PREF   = 1.0      # nurse dissatisfaction (preference score)
+W_UNDER  = 1000.0   # penalty per nurse missing (understaffing)
+W_OVER   = 100.0    # penalty per nurse extra (overstaffing)
+W_ASSIGN = 50.0     # penalty per shifts beyond min/max total assignments
+W_CONS   = 50.0     # penalty for violating consecutive-day limits
+
+# Wage parameters (€/shift for example) – tune these to your case
+WAGE_TYPE1_WEEKDAY = 1.0
+WAGE_TYPE1_WEEKEND = 1.5
+WAGE_TYPE2_WEEKDAY = 0.8
+WAGE_TYPE2_WEEKEND = 1.2
+
 
 # === CONSTANTS (replace the #define stuff) ===
 NURSES = 100
@@ -273,8 +288,7 @@ def read_shift_system():
     number_shifts = 5
 
 
-import pandas as pd
-from pathlib import Path
+
 
 BASE_DIR = Path(__file__).resolve().parent  # should already exist
 
@@ -892,14 +906,276 @@ def evaluate_solution():
     df_staffing = pd.DataFrame(staffing_rows)
     return df_summary, df_staffing
 
+# Weights from the Algo.txt
+WEIGHT_WAGE     = 0.2
+WEIGHT_NURSE    = 10.0
+WEIGHT_PATIENT  = 2.0
+
+
+def compute_components(roster):
+    """
+    Compute (wage_cost, nurse_cost, patient_cost) for a given roster.
+
+    roster: 2D list [nurse][day] with shift codes 0..4 (E,D,L,N,F).
+
+    Returns:
+        wage_cost, nurse_cost, patient_cost
+    """
+
+    wage_cost = 0.0
+    nurse_cost = 0.0
+    patient_cost = 0.0
+
+    # ---------------- 1) Wage cost ----------------
+    # For each worked shift (0..3) we add type/weekday/weekend cost.
+    for n in range(number_nurses):
+        # detect if nurse is actually scheduled in the department (not all off)
+        works_anything = any(roster[n][d] < 4 for d in range(number_days))
+        if not works_anything:
+            # "when a nurse is assigned to a line of work containing only zeros,
+            # the nurse does not work in the department and penalties are not calculated"
+            continue
+
+        t = nurse_type[n]   # 0 or 1
+
+        for d in range(number_days):
+            s = roster[n][d]
+            if s < 4:  # working day
+                weekend_flag = is_weekend(d)
+
+                if t == 0:  # type 1
+                    if weekend_flag:
+                        wage_cost += WAGE_TYPE1_WEEKEND
+                    else:
+                        wage_cost += WAGE_TYPE1_WEEKDAY
+                else:       # type 2
+                    if weekend_flag:
+                        wage_cost += WAGE_TYPE2_WEEKEND
+                    else:
+                        wage_cost += WAGE_TYPE2_WEEKDAY
+
+    # ---------------- 2) Patient satisfaction (as cost) ----------------
+    # (a) Penalty when nurses change shifts a lot  -> continuity within line of work
+    SHIFT_CHANGE_PEN = 1.0   # tune
+    for n in range(number_nurses):
+        works_anything = any(roster[n][d] < 4 for d in range(number_days))
+        if not works_anything:
+            continue
+
+        for d in range(1, number_days):
+            s_prev = roster[n][d - 1]
+            s_curr = roster[n][d]
+            # Only count changes between working shifts (exclude free)
+            if s_prev < 4 and s_curr < 4 and s_prev != s_curr:
+                patient_cost += SHIFT_CHANGE_PEN
+
+    # (b) Penalty when requirements are not met (compare with req[d][shift])
+    UNDER_PEN = 1000.0  # very high
+    OVER_PEN  = 100.0   # smaller
+
+    for d in range(number_days):
+        for s in range(number_shifts - 1):  # 0..3 E,D,L,N
+            scheduled = 0
+            for n in range(number_nurses):
+                if roster[n][d] == s:
+                    scheduled += 1
+            diff = scheduled - req[d][s]
+            if diff < 0:
+                patient_cost += UNDER_PEN * (-diff)
+            elif diff > 0:
+                patient_cost += OVER_PEN * diff
+
+    # ---------------- 3) Nurse satisfaction (as cost) ----------------
+    # Include:
+    # - Late followed by Early penalty
+    # - More than 5 consecutive working days
+    # - Wrong total shifts vs 20/15/10 rule
+    # - Individual preferences pref[n][d][s] (only when nurse works at all)
+
+    LATE_SHIFT = 2   # from your encoding: 0=E,1=D,2=L,3=N,4=F
+    EARLY_SHIFT = 0
+    LATE_EARLY_PEN = 50.0   # high penalty for L->E
+
+    CONS_WORK_LIMIT = 5     # "no nurse should work more than 5 days in a row"
+    CONS_WORK_PEN   = 50.0
+
+    ASSIGN_PEN      = 10.0  # penalty per deviation from target shifts
+    PREF_PEN        = 1.0   # scalar on preference matrix
+
+    for n in range(number_nurses):
+        works_anything = any(roster[n][d] < 4 for d in range(number_days))
+        if not works_anything:
+            # no wages, no penalties for this nurse
+            continue
+
+        # (1) Late → Early transitions
+        for d in range(1, number_days):
+            prev_s = roster[n][d - 1]
+            curr_s = roster[n][d]
+            if prev_s == LATE_SHIFT and curr_s == EARLY_SHIFT:
+                nurse_cost += LATE_EARLY_PEN
+
+        # (2) Max 5 consecutive working days
+        cons = 0
+        for d in range(number_days + 1):
+            if d < number_days and roster[n][d] < 4:
+                cons += 1
+            else:
+                if cons > CONS_WORK_LIMIT:
+                    nurse_cost += CONS_WORK_PEN * (cons - CONS_WORK_LIMIT)
+                cons = 0
+
+        # (3) Target number of shifts based on employment
+        # FTE -> 20, 0.75 -> 15, 0.5 -> 10
+        emp = nurse_percent_employment[n]  # e.g. 1.0, 0.75, 0.5
+        target_shifts = 20.0 * emp
+
+        worked = sum(1 for d in range(number_days) if roster[n][d] < 4)
+        nurse_cost += ASSIGN_PEN * abs(worked - target_shifts)
+
+        # (4) Individual preferences (only when working)
+        for d in range(number_days):
+            s = roster[n][d]
+            if s < 4:  # working shift
+                nurse_cost += PREF_PEN * pref[n][d][s]
+
+    return wage_cost, nurse_cost, patient_cost
+
+
+def compute_objective(roster):
+    """
+    Weighted objective: 0.2 * totalWages + 10 * NurseSatisfaction + 2 * PatientSatisfaction
+    All three components are already costs (higher = worse).
+    """
+    wage_cost, nurse_cost, patient_cost = compute_components(roster)
+    return (
+        WEIGHT_WAGE    * wage_cost +
+        WEIGHT_NURSE   * nurse_cost +
+        WEIGHT_PATIENT * patient_cost
+    )
+
+def random_neighbor(roster):
+    """
+    Make a small change:
+    - pick a random day
+    - pick 2 random nurses
+    - swap their assignments on that day
+
+    Returns a NEW roster (deep copy).
+    """
+    new_roster = deepcopy(roster)
+
+    if number_nurses < 2:
+        return new_roster
+
+    d = random.randrange(number_days)
+    n1 = random.randrange(number_nurses)
+    n2 = random.randrange(number_nurses)
+    while n2 == n1:
+        n2 = random.randrange(number_nurses)
+
+    s1 = new_roster[n1][d]
+    s2 = new_roster[n2][d]
+    new_roster[n1][d] = s2
+    new_roster[n2][d] = s1
+
+    return new_roster
+
+def simulated_annealing(initial_roster,
+                        T_start=1000.0,
+                        T_min=1e-3,
+                        alpha=0.95,
+                        iters_per_T=200):
+    """
+    Standard simulated annealing:
+    - start from initial_roster
+    - occasionally accept worse moves with probability exp(-delta/T)
+    - gradually cool down
+    """
+    current = deepcopy(initial_roster)
+    best = deepcopy(initial_roster)
+
+    current_cost = compute_objective(current)
+    best_cost = current_cost
+
+    T = T_start
+
+    while T > T_min:
+        for _ in range(iters_per_T):
+            neighbor = random_neighbor(current)
+            neighbor_cost = compute_objective(neighbor)
+            delta = neighbor_cost - current_cost
+
+            if delta < 0:
+                # better → accept always
+                current = neighbor
+                current_cost = neighbor_cost
+                if neighbor_cost < best_cost:
+                    best = deepcopy(neighbor)
+                    best_cost = neighbor_cost
+            else:
+                # worse → accept with probability
+                p = math.exp(-delta / T)
+                if random.random() < p:
+                    current = neighbor
+                    current_cost = neighbor_cost
+
+        T *= alpha  # cool down
+
+    return best, best_cost
+
+def is_weekend(day_idx: int) -> bool:
+    """
+    Return True if day_idx (0-based) is Saturday or Sunday.
+    Here we simply use (d+1) % 7 in {6,0} as Sat/Sun.
+    """
+    d1 = day_idx + 1  # convert to 1-based
+    return (d1 % 7 == 6) or (d1 % 7 == 0)
+
 
 def procedure():
     """
-    Construct the monthly roster.
+    Construct the monthly roster for department A.
 
-    Current implementation: read the schedule directly from Excel.
+    Steps:
+    1) Read the input schedule from Excel (Case_E_MonthlyRoster_A).
+    2) Use simulated annealing to improve it w.r.t. weighted objective:
+         0.2 * Wage + 10 * NurseSat + 2 * PatientSat
+    3) Store the best roster back into global monthly_roster.
     """
+    global monthly_roster
+
+    # 1) start from the Excel monthly roster
     read_monthly_roster_from_excel()
+
+    # convert to plain list-of-lists for SA
+    initial_roster = [
+        [monthly_roster[n][d] for d in range(number_days)]
+        for n in range(number_nurses)
+    ]
+
+    w0, n0, p0 = compute_components(initial_roster)
+    obj0 = compute_objective(initial_roster)
+    print("Initial schedule metrics:")
+    print(f"  Wage_cost      = {w0:.2f}")
+    print(f"  Nurse_cost     = {n0:.2f}")
+    print(f"  Patient_cost   = {p0:.2f}")
+    print(f"  Objective      = {obj0:.2f}")
+
+    # 2) run simulated annealing
+    best_roster, best_obj = simulated_annealing(initial_roster)
+
+    w1, n1, p1 = compute_components(best_roster)
+    print("Best schedule metrics after SA:")
+    print(f"  Wage_cost      = {w1:.2f}")
+    print(f"  Nurse_cost     = {n1:.2f}")
+    print(f"  Patient_cost   = {p1:.2f}")
+    print(f"  Objective      = {best_obj:.2f}")
+
+    # 3) copy best_roster back into the global monthly_roster
+    for n in range(number_nurses):
+        for d in range(number_days):
+            monthly_roster[n][d] = best_roster[n][d]
 
 
 def add_nurse_to_day_shift(nurse_id: int, day_id: int, shift_id: int):
