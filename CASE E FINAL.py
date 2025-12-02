@@ -298,7 +298,7 @@ def read_personnel_characteristics():
     excel_file = BASE_DIR / "CASE_E_input.xlsx"
     sheet_name = f"Case_E_Preferences_{department}"
 
-    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
     n_prefs = len(df)
 
 
