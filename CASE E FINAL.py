@@ -5,188 +5,99 @@ import pandas as pd
 from pathlib import Path
 from copy import deepcopy
 
+# Paths and constants
 
 BASE_DIR = Path(__file__).resolve().parent
+EXCEL_FILE = BASE_DIR / "CASE_E_input.xlsx"
 
 SHIFT_LABELS = {0: "E", 1: "D", 2: "L", 3: "N", 4: "F"}
-# Weights for objective (tune later if needed)
+
+# Objective weights
 W_PREF   = 1.0      # nurse dissatisfaction (preference score)
 W_UNDER  = 1000.0   # penalty per nurse missing (understaffing)
 W_OVER   = 100.0    # penalty per nurse extra (overstaffing)
 W_ASSIGN = 50.0     # penalty per shifts beyond min/max total assignments
 W_CONS   = 50.0     # penalty for violating consecutive-day limits
 
-# Wage parameters (€/shift for example) – tune these to your case
+# Wage parameters (€/shift for example)
 WAGE_TYPE1_WEEKDAY = 1.0
 WAGE_TYPE1_WEEKEND = 1.5
 WAGE_TYPE2_WEEKDAY = 0.8
 WAGE_TYPE2_WEEKEND = 1.2
 
 
-# === CONSTANTS (replace the #define stuff) ===
+# CONSTANTS 
 NURSES = 100
 DAYS = 30
 SHIFTS = 5
 TYPES = 2
 
-# === GENERIC PERSONNEL ROSTERING VARIABLES ===
-department: str = ""          # was: char department[10];
-number_days: int = 0          # was: int number_days;
-number_nurses: int = 0        # was: int number_nurses;
-number_shifts: int = 0        # was: int number_shifts;
-shift_code: int = 0           # was: int shift_code;
+# GENERIC PERSONNEL ROSTERING VARIABLES
+department: str = ""         
+number_days: int = 0          
+number_nurses: int = 0        
+number_shifts: int = 0        
+shift_code: int = 0           
 
 
-# === VARIABLES SHIFT SYSTEM ===
-# int hrs[SHIFTS];
+# SHIFT SYSTEM
+
 hrs = [0 for _ in range(SHIFTS)]
-
-# int req[DAYS][SHIFTS];
 req = [[0 for _ in range(SHIFTS)] for _ in range(DAYS)]
-
-# int shift[SHIFTS];
 shift = [0 for _ in range(SHIFTS)]
-
-# int start_shift[SHIFTS];
 start_shift = [0 for _ in range(SHIFTS)]
-
-# int end_shift[SHIFTS];
 end_shift = [0 for _ in range(SHIFTS)]
-
 length: int = 0
 
 
-# === VARIABLES PERSONNEL CHARACTERISTICS ===
-number_types: int = 0                 # was: int number_types;
-
-# int nurse_type[NURSES];
+# PERSONNEL CHARACTERISTICS
+number_types: int = 0                 
 nurse_type = [0 for _ in range(NURSES)]
-
-# int pref[NURSES][DAYS][SHIFTS];
-pref = [
-    [
-        [0 for _ in range(SHIFTS)]
-        for _ in range(DAYS)
-    ]
-    for _ in range(NURSES)
-]
-
-# float nurse_percent_employment[NURSES];
+pref = [[[0 for _ in range(SHIFTS)] for _ in range(DAYS)]for _ in range(NURSES)]
 nurse_percent_employment = [0.0 for _ in range(NURSES)]
-
-# std::string personnel_number[NURSES];
 personnel_number = ["" for _ in range(NURSES)]
 
 
-# === VARIABLES PERSONNEL ROSTER ===
-# int cyclic_roster[NURSES][DAYS];
-cyclic_roster = [
-    [0 for _ in range(DAYS)]
-    for _ in range(NURSES)
-]
-
-# int monthly_roster[NURSES][DAYS];
-monthly_roster = [
-    [0 for _ in range(DAYS)]
-    for _ in range(NURSES)
-]
+# PERSONNEL ROSTER
+cyclic_roster = [[0 for _ in range(DAYS)] for _ in range(NURSES)]
+monthly_roster = [[0 for _ in range(DAYS)] for _ in range(NURSES)]
 
 
-# === VARIABLES MONTHLY ROSTER RULES ===
-# int min_ass[NURSES];
+# MONTHLY ROSTER RULES
 min_ass = [0 for _ in range(NURSES)]
-
-# int max_ass[NURSES];
 max_ass = [0 for _ in range(NURSES)]
-
-weekend: int = 0  # day the weekend starts
-
-# int identical[NURSES];
+weekend: int = 0  
 identical = [0 for _ in range(NURSES)]
 
-# int max_cons[NURSES][SHIFTS];
-max_cons = [
-    [0 for _ in range(SHIFTS)]
-    for _ in range(NURSES)
-]
+max_cons = [[0 for _ in range(SHIFTS)] for _ in range(NURSES)]
+min_cons = [[0 for _ in range(SHIFTS)] for _ in range(NURSES)]
+min_shift = [[0 for _ in range(SHIFTS)] for _ in range(NURSES)]
+max_shift = [[0 for _ in range(SHIFTS)] for _ in range(NURSES)]
 
-# int min_cons[NURSES][SHIFTS];
-min_cons = [
-    [0 for _ in range(SHIFTS)]
-    for _ in range(NURSES)
-]
-
-# int min_shift[NURSES][SHIFTS];
-min_shift = [
-    [0 for _ in range(SHIFTS)]
-    for _ in range(NURSES)
-]
-
-# int max_shift[NURSES][SHIFTS];
-max_shift = [
-    [0 for _ in range(SHIFTS)]
-    for _ in range(NURSES)
-]
-
-# int min_cons_wrk[NURSES];
 min_cons_wrk = [0 for _ in range(NURSES)]
-
-# int max_cons_wrk[NURSES];
 max_cons_wrk = [0 for _ in range(NURSES)]
-
-# int extreme_max_cons[NURSES][SHIFTS];
-extreme_max_cons = [
-    [0 for _ in range(SHIFTS)]
-    for _ in range(NURSES)
-]
-
-# int extreme_min_cons[NURSES][SHIFTS];
-extreme_min_cons = [
-    [0 for _ in range(SHIFTS)]
-    for _ in range(NURSES)
-]
-
+extreme_max_cons = [[0 for _ in range(SHIFTS)] for _ in range(NURSES)]
+extreme_min_cons = [[0 for _ in range(SHIFTS)] for _ in range(NURSES)]
 extreme_max_cons_wrk: int = 0
 extreme_min_cons_wrk: int = 0
 
-
-# === EVALUATION VARIABLES ===
+# EVALUATION VARIABLES
 count_ass: int = 0
 count_cons_wrk: int = 0
 count_cons: int = 0
-
-# int count_shift[SHIFTS];
 count_shift = [0 for _ in range(SHIFTS)]
 
-# int scheduled[TYPES][DAYS][SHIFTS];
 scheduled = [
-    [
-        [0 for _ in range(SHIFTS)]
-        for _ in range(DAYS)
-    ]
+    [[0 for _ in range(SHIFTS)] for _ in range(DAYS)]
     for _ in range(TYPES)
 ]
 
-# int violations[DAYS * SHIFTS];
 violations = [0 for _ in range(DAYS * SHIFTS)]
 
-def shift_decoding(shift_code: int) -> int:
-    """
-    Return the index in `shift` that has the given encoded shift_code.
-    If not found, return -1.
-    """
-    for idx in range(number_shifts):
-        if shift[idx] == shift_code:
-            return idx
-    return -1
-
-import os  # at top with the other imports if you want, optional
+# Generic helpers
 
 def _find_cell_containing(df, text):
-    """
-    Return (row, col) of the first cell whose string contains 'text'
-    (case-insensitive).
-    """
+    """ Return (row, col) of the first cell whose string contains 'text' (case-insensitive). """
     target = text.upper()
     for r in range(df.shape[0]):
         for c in range(df.shape[1]):
@@ -195,55 +106,62 @@ def _find_cell_containing(df, text):
                 return r, c
     raise ValueError(f"Cell containing '{text}' not found in shift system sheet")
 
+def _find_row_starting_with(df, text):
+    """Return row index where column 0 starts with 'text' (case-insensitive)."""
+    target = text.upper()
+    for r in range(df.shape[0]):
+        val = df.iat[r, 0]
+        if isinstance(val, str) and val.strip().upper().startswith(target):
+            return r
+    raise ValueError(f"Row with label starting '{text}' not found in constraints sheet")
 
+def _find_col_with_label(df, row_idx, label):
+    """Return column index in row 'row_idx' whose cell matches 'label' (case-insensitive)."""
+    target = label.upper()
+    for c in range(df.shape[1]):
+        val = df.iat[row_idx, c]
+        if isinstance(val, str) and val.strip().upper().startswith(target):
+            return c
+    raise ValueError(f"Column with label '{label}' not found in row {row_idx}")
+
+def debug_list_sheets():
+    excel_file = BASE_DIR / "CASE_E_input.xlsx"
+    xls = pd.ExcelFile(excel_file)
+    print("Excel file:", excel_file)
+    print("Sheets:", xls.sheet_names)
+
+def is_weekend(day_idx: int) -> bool:
+    """ Return True if day_idx (0-based) is Saturday or Sunday."""
+    d1 = day_idx + 1  # convert to 1-based
+    return (d1 % 7 == 6) or (d1 % 7 == 0)
+
+# Input reading
 def read_shift_system():
-    """
-    Read the shift system for department A from the 'Case_E_Manual' sheet.
-
-    Expected layout (simplified):
-
-        A1: 'Number of shifts'     B1: 'Duration (in h)'
-        A2: <num_shifts>          B2: <length>
-
-        row ~4: 'Start shifts Dep A' | 'Start shifts Dep B' | ...
-
-        below that (num_shifts rows): start hours for each shift, per dep
-
-        row ~11: 'Requirements Dep A' | 'Requirements Dep B' | ...
-
-        below that (num_shifts rows): required nurses per shift, per dep
-
+    """ Read the shift system for department A from the 'Case_C_9' sheet.
     Internal encoding:
-        0 = Early (E)   3 <= start < 9
-        1 = Day   (D)   9 <= start < 12
-        2 = Late  (L)   12 <= start < 21
-        3 = Night (N)   start >= 21 or start < 3
-        4 = Free  (F)
+      0 = Early (E)   3 <= start < 9
+      1 = Day   (D)   9 <= start < 12
+      2 = Late  (L)   12 <= start < 21
+      3 = Night (N)   start >= 21 or start < 3
+      4 = Free  (F)
     """
     global number_shifts, length, hrs, req, shift, start_shift, end_shift, number_days
-
-    excel_file = BASE_DIR / "CASE_E_input.xlsx"
-    sheet_name = "Case_C_9"   # adjust if your sheet has a different name
-
+    sheet_name = "Case_C_9"   
     df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
 
-    # ---- Number of shifts and length ----
     number_shifts = int(df.iat[1, 0])  # A2
     length = int(df.iat[1, 1])         # B2
 
-    # ---- Find 'Start shifts Dep A' and 'Requirements Dep A' headers ----
     r_start, c_start = _find_cell_containing(df, "START SHIFTS DEP A")
     r_req, c_req = _find_cell_containing(df, "REQUIREMENTS DEP A")
 
-    # The next 'number_shifts' rows after these headers contain numeric data
     start_rows = [r_start + 1 + i for i in range(number_shifts)]
     req_rows = [r_req + 1 + i for i in range(number_shifts)]
 
-    # Reset requirements for day 0
     for j in range(SHIFTS):  # 0..4
         req[0][j] = 0
 
-    # ---- Process each real shift (E/D/L) ----
+    # Process each real shift (E/D/L/N)
     for idx in range(number_shifts):
         row_start = start_rows[idx]
         row_req = req_rows[idx]
@@ -255,7 +173,6 @@ def read_shift_system():
         k = idx + 1
         start_shift[k] = start_h
 
-        # decide internal code from start hour
         if 3 <= start_h < 9:
             code = 0  # Early
         elif 9 <= start_h < 12:
@@ -269,29 +186,18 @@ def read_shift_system():
         hrs[code] = length
         req[0][code] = required
 
-        # compute end time
-        if start_h + length < 24:
-            end_shift[k] = start_h + length
-        else:
-            end_shift[k] = start_h + length - 24
+        end_shift[k] = start_h + length if start_h + length < 24 else start_h + length - 24
 
-    # ---- Free shift (code 4) ----
+    # Free shift 
     shift[0] = 4
-    hrs[4] = 0  # F has no hours
+    hrs[4] = 0 
 
-    # ---- Copy requirements to all days ----
+    # Copy requirements to all days 
     for day in range(1, number_days):
         for j in range(SHIFTS):
             req[day][j] = req[0][j]
 
-    # We now have 5 shifts in the algorithm: E, D, L, N, F
-    number_shifts = 5
-
-
-
-
-BASE_DIR = Path(__file__).resolve().parent  # should already exist
-
+    number_shifts = SHIFTS
 
 def read_personnel_characteristics():
     """
@@ -361,12 +267,6 @@ def read_personnel_characteristics():
         nurse_type[k] = int(row.iloc[type_col]) - 1  # make it 0 or 1 internally
 
 
-def debug_list_sheets():
-    excel_file = BASE_DIR / "CASE_E_input.xlsx"
-    xls = pd.ExcelFile(excel_file)
-    print("Excel file:", excel_file)
-    print("Sheets:", xls.sheet_names)
-
 def read_cyclic_roster():
     """
     Read the cyclic roster for this department from Excel.
@@ -429,26 +329,6 @@ def read_cyclic_roster():
         for d_idx, col in enumerate(day_cols):
             code = int(df.iloc[k][col])      # 0=E,1=D,2=L,3=N,4=F
             cyclic_roster[k][d_idx] = code   # already internal encoding
-
-
-def _find_row_starting_with(df, text):
-    """Return row index where column 0 starts with 'text' (case-insensitive)."""
-    target = text.upper()
-    for r in range(df.shape[0]):
-        val = df.iat[r, 0]
-        if isinstance(val, str) and val.strip().upper().startswith(target):
-            return r
-    raise ValueError(f"Row with label starting '{text}' not found in constraints sheet")
-
-
-def _find_col_with_label(df, row_idx, label):
-    """Return column index in row 'row_idx' whose cell matches 'label' (case-insensitive)."""
-    target = label.upper()
-    for c in range(df.shape[1]):
-        val = df.iat[row_idx, c]
-        if isinstance(val, str) and val.strip().upper().startswith(target):
-            return c
-    raise ValueError(f"Column with label '{label}' not found in row {row_idx}")
 
 
 def read_monthly_roster_constraints():
@@ -698,6 +578,18 @@ def read_input():
 
     # 4) force number of shifts in algorithm to 5 (E, D, L, N, off)
     number_shifts = 5
+
+def shift_decoding(shift_code: int) -> int:
+    """
+    Return the index in `shift` that has the given encoded shift_code.
+    If not found, return -1.
+    """
+    for idx in range(number_shifts):
+        if shift[idx] == shift_code:
+            return idx
+    return -1
+
+import os  # at top with the other imports if you want, optional
 
 
 def print_output():
@@ -1124,13 +1016,6 @@ def simulated_annealing(initial_roster,
 
     return best, best_cost
 
-def is_weekend(day_idx: int) -> bool:
-    """
-    Return True if day_idx (0-based) is Saturday or Sunday.
-    Here we simply use (d+1) % 7 in {6,0} as Sat/Sun.
-    """
-    d1 = day_idx + 1  # convert to 1-based
-    return (d1 % 7 == 6) or (d1 % 7 == 0)
 
 
 def procedure():
