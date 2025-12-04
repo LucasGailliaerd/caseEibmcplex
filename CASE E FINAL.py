@@ -43,7 +43,7 @@ def shift_decoding(code: int) -> str:
 
 # Objective weights
 W_PREF   = 1.0      # nurse dissatisfaction (preference score)
-W_UNDER  = 1000.0   # penalty per nurse missing (understaffing)
+W_UNDER  = 200.0   # penalty per nurse missing (understaffing)
 W_OVER   = 100.0    # penalty per nurse extra (overstaffing)
 W_ASSIGN = 50.0     # penalty per shifts beyond min/max total assignments
 W_CONS   = 50.0     # penalty for violating consecutive-day limits
@@ -59,7 +59,6 @@ WAGE_WEEKEND = {
     0: [216.0, 216.0, 237.6, 291.6],   # type 1: E, D, L, N
     1: [162.0, 162.0, 178.2, 218.7],   # type 2: E, D, L, N
 }
-
 
 # CONSTANTS 
 NURSES = 32
