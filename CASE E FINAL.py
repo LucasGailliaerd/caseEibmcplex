@@ -8,7 +8,7 @@ from copy import deepcopy
 # Paths and constants
 
 BASE_DIR = Path(__file__).resolve().parent
-EXCEL_FILE = BASE_DIR / "CASE_E_input.xlsx"
+excel_file = BASE_DIR / "CASE_E_input.xlsx"
 
 SHIFT_LABELS = {0: "E", 1: "D", 2: "L", 3: "N", 4: "F"}
 
@@ -292,7 +292,7 @@ def read_cyclic_roster():
     global number_nurses, number_days, cyclic_roster, nurse_type
 
     sheet_name = f"Case_D_Cyclic_{department}"
-    df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
+    df = pd.read_excel(excel_file, sheet_name=sheet_name)
     n_cyc = len(df)
 
     if number_nurses != 0 and n_cyc != number_nurses:
@@ -304,11 +304,11 @@ def read_cyclic_roster():
     number_nurses = n_cyc
 
     if "NurseType" not in df.columns:
-        raise ValueError(f"'NurseType' column missing in sheet {sheet_name} of {EXCEL_FILE}")
+        raise ValueError(f"'NurseType' column missing in sheet {sheet_name} of {excel_file}")
 
     day_cols = [c for c in df.columns if str(c).lower().startswith("day")]
     if not day_cols:
-        raise ValueError(f"No Day* columns found in sheet {sheet_name} of {EXCEL_FILE}")
+        raise ValueError(f"No Day* columns found in sheet {sheet_name} of {excel_file}")
 
     excel_days = len(day_cols)
     if number_days != excel_days:
@@ -338,7 +338,7 @@ def read_monthly_roster_constraints():
     global extreme_max_cons_wrk, extreme_min_cons_wrk
 
     sheet_name = "Case_E_Constraints_A"
-    df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name, header=None)
+    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
 
     # Total assignments
     r_ass = _find_row_starting_with(df, "NUMBER OF ASSIGNMENTS")
@@ -468,7 +468,7 @@ def read_monthly_roster_from_excel():
     global monthly_roster, number_nurses, number_days
 
     sheet_name = f"Case_E_MonthlyRoster_{department}"
-    df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
+    df = pd.read_excel(excel_file, sheet_name=sheet_name)
 
     if "Personnel Number" in df.columns:
         for k in range(min(number_nurses, len(df))):
@@ -481,7 +481,7 @@ def read_monthly_roster_from_excel():
 
     day_cols = [c for c in df.columns if str(c).lower().startswith("day")]
     if not day_cols:
-        raise ValueError(f"No Day* columns found in sheet {sheet_name} of {EXCEL_FILE}")
+        raise ValueError(f"No Day* columns found in sheet {sheet_name} of {excel_file}")
 
     excel_days = len(day_cols)
     if excel_days != number_days:
