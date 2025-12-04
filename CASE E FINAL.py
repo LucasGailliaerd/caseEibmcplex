@@ -741,16 +741,14 @@ def compute_components(roster):
             if s_prev < 4 and s_curr < 4 and s_prev != s_curr:
                 patient_cost += SHIFT_CHANGE_PEN
 
-    UNDER_PEN = 1000.0
-    OVER_PEN = 100.0
     for d in range(number_days):
         for s in range(number_shifts - 1):
             scheduled_count = sum(roster[n][d] == s for n in range(number_nurses))
             diff = scheduled_count - req[d][s]
             if diff < 0:
-                patient_cost += UNDER_PEN * (-diff)
+                patient_cost += W_UNDER * (-diff)
             elif diff > 0:
-                patient_cost += OVER_PEN * diff
+                patient_cost += W_OVER * diff
 
     # 3) Nurse satisfaction (as cost)
     LATE_SHIFT = 2
