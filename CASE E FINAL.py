@@ -758,10 +758,10 @@ def compute_components(roster):
     # 3) Nurse satisfaction (as cost)
     LATE_SHIFT = 2
     EARLY_SHIFT = 0
-    LATE_EARLY_PEN = 50.0
+    LATE_EARLY_PEN = 200
     CONS_WORK_LIMIT = 5
-    CONS_WORK_PEN = 50.0
-    ASSIGN_PEN = 10.0
+    CONS_WORK_PEN = 200
+    ASSIGN_PEN = 50
     PREF_PEN = 1.0
 
     for n in range(number_nurses):
