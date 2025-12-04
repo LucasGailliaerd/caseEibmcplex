@@ -45,8 +45,8 @@ def shift_decoding(code: int) -> str:
 W_PREF   = 1.0      # nurse dissatisfaction (preference score)
 W_UNDER  = 200.0   # penalty per nurse missing (understaffing)
 W_OVER   = 100.0    # penalty per nurse extra (overstaffing)
-W_ASSIGN = 50.0     # penalty per shifts beyond min/max total assignments
-W_CONS   = 50.0     # penalty for violating consecutive-day limits
+W_ASSIGN = 200     # penalty per shifts beyond min/max total assignments
+W_CONS   = 100    # penalty for violating consecutive-day limits
 
 # Wage parameters (€/shift), indexed as [nurse_type][shift_code 0..3]
 # nurse_type: 0 = type 1 nurse, 1 = type 2 nurse
@@ -702,9 +702,9 @@ def evaluate_solution():
 
 # Objective 
 
-WEIGHT_WAGE     = 0.2
-WEIGHT_NURSE    = 10.0
-WEIGHT_PATIENT  = 2.0
+WEIGHT_WAGE     = 1
+WEIGHT_NURSE    = 1
+WEIGHT_PATIENT  = 1
 
 
 def compute_components(roster):
