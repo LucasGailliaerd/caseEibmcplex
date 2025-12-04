@@ -48,16 +48,22 @@ W_OVER   = 100.0    # penalty per nurse extra (overstaffing)
 W_ASSIGN = 50.0     # penalty per shifts beyond min/max total assignments
 W_CONS   = 50.0     # penalty for violating consecutive-day limits
 
-# Wage parameters (€/shift for example)
-WAGE_TYPE1_WEEKDAY = 1.0
-WAGE_TYPE1_WEEKEND = 1.5
-WAGE_TYPE2_WEEKDAY = 0.8
-WAGE_TYPE2_WEEKEND = 1.2
+# Wage parameters (€/shift), indexed as [nurse_type][shift_code 0..3]
+# nurse_type: 0 = type 1 nurse, 1 = type 2 nurse
+WAGE_WEEKDAY = {
+    0: [160.0, 160.0, 176.0, 216.0],   # type 1: E, D, L, N
+    1: [120.0, 120.0, 132.0, 162.0],   # type 2: E, D, L, N
+}
+
+WAGE_WEEKEND = {
+    0: [216.0, 216.0, 237.6, 291.6],   # type 1: E, D, L, N
+    1: [162.0, 162.0, 178.2, 218.7],   # type 2: E, D, L, N
+}
 
 
 # CONSTANTS 
-NURSES = 100
-DAYS = 30
+NURSES = 32
+DAYS = 28
 SHIFTS = 5
 TYPES = 2
 
@@ -712,21 +718,21 @@ def compute_components(roster):
     nurse_cost = 0.0
     patient_cost = 0.0
 
-    # 1) Wage cost
+        # 1) Wage cost
     for n in range(number_nurses):
         works_anything = any(roster[n][d] < 4 for d in range(number_days))
         if not works_anything:
             continue
 
-        t = nurse_type[n]
+        t = nurse_type[n]  # 0 = type 1, 1 = type 2
         for d in range(number_days):
             s = roster[n][d]
-            if s < 4:
+            if s < 4:  # E/D/L/N only
                 weekend_flag = is_weekend(d)
-                if t == 0:
-                    wage_cost += WAGE_TYPE1_WEEKEND if weekend_flag else WAGE_TYPE1_WEEKDAY
+                if weekend_flag:
+                    wage_cost += WAGE_WEEKEND[t][s]
                 else:
-                    wage_cost += WAGE_TYPE2_WEEKEND if weekend_flag else WAGE_TYPE2_WEEKDAY
+                    wage_cost += WAGE_WEEKDAY[t][s]
 
     # 2) Patient satisfaction (as cost)
     SHIFT_CHANGE_PEN = 1.0
