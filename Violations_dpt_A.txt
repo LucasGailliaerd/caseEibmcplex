@@ -1,6 +1,6 @@
-The total preference score is 33706.
+The total preference score is 33649.
 The constraint 'maximum number of consecutive working days' is violated 0 times.
-The constraint 'maximum number of consecutive working days per shift type' is violated 85 times.
+The constraint 'maximum number of consecutive working days per shift type' is violated 77 times.
 The constraint 'minimum number of assignments' is violated 0 times.
 The constraint 'maximum number of assignments' is violated 32 times.
 

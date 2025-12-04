@@ -831,11 +831,12 @@ def random_neighbor(roster):
     return new_roster
 
 
+
 def simulated_annealing(initial_roster,
                         T_start=1000.0,
                         T_min=1e-3,
                         alpha=0.95,
-                        iters_per_T=200):
+                        iters_per_T=1000):
     """
     Standard simulated annealing:
       - occasionally accept worse moves with probability exp(-delta/T)
