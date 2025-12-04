@@ -12,6 +12,35 @@ EXCEL_FILE = BASE_DIR / "CASE_E_input.xlsx"
 
 SHIFT_LABELS = {0: "E", 1: "D", 2: "L", 3: "N", 4: "F"}
 
+def shift_decoding(code: int) -> str:
+    """
+    Decode a shift code into a descriptive string:
+    Example: 'E (start 06, end 14, hrs 8)'.
+    """
+    label = SHIFT_LABELS.get(code, "?")
+
+    if code == 4:
+        return "F (Free)"
+
+    # shifts 1–3 map to indexes 1–3 in start_shift[], end_shift[]
+    # internal code 0..3 maps to k = 1..4 but only first N shifts matter
+    # Use inverse lookup:
+    k = None
+    for idx in range(1, number_shifts + 1):
+        if shift[idx] == code:
+            k = idx
+            break
+
+    if k is None:
+        return f"{label} (unknown shift definition)"
+
+    start = start_shift[k]
+    end = end_shift[k]
+    hours = hrs[code]
+
+    return f"{label} (start {start:02d}, end {end:02d}, hrs {hours})"
+
+
 # Objective weights
 W_PREF   = 1.0      # nurse dissatisfaction (preference score)
 W_UNDER  = 1000.0   # penalty per nurse missing (understaffing)
@@ -203,24 +232,17 @@ def read_personnel_characteristics():
     """
     Read nurse preferences, employment, and type from Excel instead of txt.
 
-    Excel file:
-      - CASE_E_input.xlsx
-      - sheet: 'Personnel_A' (for department 'A')
-      - NO HEADER ROW
-      - Each row:
-          col0: Personnel Number (string)
-          col1..col(1+5*number_days-1):  preference ints (flattened: day 1 shift0..4, day 2 shift0..4, ...)
-          next col: employment (float, e.g. 1.00)
-          next col: type (1 or 2, will be stored as 0 or 1 internally)
+    E Sheet: 'Case_E_Preferences_<department>'
+      col0: Personnel Number (str)
+      next 5 * number_days: prefs (day/shift flattened)
+      next: employment (float)
+      next: type (1 or 2 -> stored as 0 or 1)
     """
     global number_types, personnel_number, pref, nurse_percent_employment, nurse_type, number_nurses, number_days
 
-    excel_file = BASE_DIR / "CASE_E_input.xlsx"
     sheet_name = f"Case_E_Preferences_{department}"
-
     df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
     n_prefs = len(df)
-
 
     if number_nurses != 0 and n_prefs != number_nurses:
         raise ValueError(
@@ -229,22 +251,14 @@ def read_personnel_characteristics():
     )
 
     number_nurses = n_prefs
-
-
     number_types = TYPES
-
     
-
-    # total prefs per nurse = 5 * number_days
-    prefs_per_nurse = 5 * number_days
+    prefs_per_nurse = SHIFTS * number_days
 
     for k in range(number_nurses):
         row = df.iloc[k]
-
-        # 0: personnel number
         personnel_number[k] = str(row.iloc[0])
 
-        # 1..prefs_per_nurse: flattened preferences
         pref_values = row.iloc[1 : 1 + prefs_per_nurse].tolist()
 
         if len(pref_values) != prefs_per_nurse:
@@ -255,39 +269,32 @@ def read_personnel_characteristics():
 
         idx = 0
         for day in range(number_days):
-            for s in range(5):  # 5 shift types
+            for s in range(SHIFTS):  
                 pref[k][day][s] = int(pref_values[idx])
                 idx += 1
 
-        # employment and type
         employment_col = 1 + prefs_per_nurse
         type_col = employment_col + 1
 
         nurse_percent_employment[k] = float(row.iloc[employment_col])
-        nurse_type[k] = int(row.iloc[type_col]) - 1  # make it 0 or 1 internally
+        nurse_type[k] = int(row.iloc[type_col]) - 1  
 
 
 def read_cyclic_roster():
     """
-    Read the cyclic roster for this department from Excel.
+    Read the cyclic roster for this department.
 
-    Excel file:
-      - CASE_E_input.xlsx  (must be in the same folder as this .py)
-      - sheet: 'CyclicRoster_<department>', e.g. 'CyclicRoster_A'
-      - columns:
-          NurseType, Day1, Day2, ..., DayN
-      - NurseType = 1,2,... (will be stored internally as 0,1,...)
-      - Day* cells = external shift codes (indices into shift[])
+    Sheet: 'Case_D_Cyclic_<department>'
+      columns: NurseType, Day1, Day2, ..., DayN
+      NurseType: 1,2,... -> stored as 0,1,...
+      Day*: shift codes in internal encoding (0..4)
     """
     global number_nurses, number_days, cyclic_roster, nurse_type
 
-    excel_file = BASE_DIR / "CASE_E_input.xlsx"
     sheet_name = f"Case_D_Cyclic_{department}"
-
-    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+    df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
     n_cyc = len(df)
 
-    
     if number_nurses != 0 and n_cyc != number_nurses:
         raise ValueError(
             f"Inconsistent nurse count: previous input had {number_nurses}, "
@@ -296,81 +303,44 @@ def read_cyclic_roster():
 
     number_nurses = n_cyc
 
-
-    # Check NurseType column
     if "NurseType" not in df.columns:
-        raise ValueError(
-            f"'NurseType' column missing in sheet {sheet_name} of {excel_file}"
-        )
+        raise ValueError(f"'NurseType' column missing in sheet {sheet_name} of {EXCEL_FILE}")
 
-    # All day columns = those starting with "Day"
     day_cols = [c for c in df.columns if str(c).lower().startswith("day")]
     if not day_cols:
-        raise ValueError(
-            f"No Day* columns found in sheet {sheet_name} of {excel_file}"
-        )
+        raise ValueError(f"No Day* columns found in sheet {sheet_name} of {EXCEL_FILE}")
 
-    # Number of days from Excel
     excel_days = len(day_cols)
     if number_days != excel_days:
         print(
             f"WARNING: number_days in code = {number_days}, "
-            f"but Excel has {excel_days} day columns. "
-            f"Using {excel_days} from Excel."
+            f"but Excel has {excel_days} day columns. Using {excel_days}."
         )
         number_days = excel_days
 
-
-    # Fill nurse_type and cyclic_roster
     for k in range(number_nurses):
         nt_val = int(df.iloc[k]["NurseType"])
-        nurse_type[k] = nt_val - 1  # type 1/2 -> 0/1
-
+        nurse_type[k] = nt_val - 1
         for d_idx, col in enumerate(day_cols):
-            code = int(df.iloc[k][col])      # 0=E,1=D,2=L,3=N,4=F
-            cyclic_roster[k][d_idx] = code   # already internal encoding
-
+            code = int(df.iloc[k][col])      # 0..4
+            cyclic_roster[k][d_idx] = code
 
 def read_monthly_roster_constraints():
     """
-    Read monthly roster constraints for Case E, Department A from the
-    'Case_E_Constraints_A' sheet with layout:
+    Read monthly roster constraints (Case_E_Constraints_A).
 
-    DEPARTMENT A
-    NUMBER OF ASSIGNMENTS
-      Minimum  Maximum
-      0        20
-
-    NUMBER OF CONSECUTIVE ASSIGNMENTS
-      Minimum  Maximum
-      1        6
-
-    NUMBER OF CONSECUTIVE ASSIGNMENTS PER SHIFT TYPE
-      Minimum  Maximum
-      1        6
-      1        6
-      1        28
-
-    NUMBER OF ASSIGNMENTS PER SHIFT TYPE
-      Minimum  Maximum
-      0        12
-      0        12
-      0        12
-
-    IDENTICAL WEEKEND CONSTRAINT
-      NO
+    Fills: min_ass, max_ass, min_cons_wrk, max_cons_wrk,
+           min_cons, max_cons, min_shift, max_shift, identical, etc.
     """
     global min_ass, max_ass, min_cons_wrk, max_cons_wrk
     global min_cons, max_cons, extreme_max_cons, extreme_min_cons
     global min_shift, max_shift, identical
     global extreme_max_cons_wrk, extreme_min_cons_wrk
 
-    excel_file = BASE_DIR / "CASE_E_input.xlsx"
     sheet_name = "Case_E_Constraints_A"
+    df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name, header=None)
 
-    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
-
-    # ----- NUMBER OF ASSIGNMENTS -----
+    # Total assignments
     r_ass = _find_row_starting_with(df, "NUMBER OF ASSIGNMENTS")
     header_row_ass = r_ass + 1
     val_row_ass = header_row_ass + 1
@@ -381,9 +351,8 @@ def read_monthly_roster_constraints():
     base_min_ass = int(df.iat[val_row_ass, min_col])
     base_max_ass = int(df.iat[val_row_ass, max_col])
 
-    # ----- NUMBER OF CONSECUTIVE ASSIGNMENTS (GLOBAL) -----
+    # Global consecutive assignments
     r_cons = _find_row_starting_with(df, "NUMBER OF CONSECUTIVE ASSIGNMENTS")
-    # ensure we don't pick the "PER SHIFT TYPE" block
     for r in range(r_cons, df.shape[0]):
         val = df.iat[r, 0]
         if isinstance(val, str):
@@ -401,7 +370,7 @@ def read_monthly_roster_constraints():
     base_min_cons_wrk = int(df.iat[val_row_cons, min_col_cons])
     base_max_cons_wrk = int(df.iat[val_row_cons, max_col_cons])
 
-    # ----- CONSECUTIVE ASSIGNMENTS PER SHIFT TYPE -----
+    # Consecutive assignments per shift type
     r_cons_sh = _find_row_starting_with(df, "NUMBER OF CONSECUTIVE ASSIGNMENTS PER SHIFT TYPE")
     header_row_cons_sh = r_cons_sh + 1
     first_val_row_cons_sh = header_row_cons_sh + 1
@@ -411,23 +380,21 @@ def read_monthly_roster_constraints():
 
     base_min_cons = {}
     base_max_cons = {}
-
-    # collect all consecutive non-empty rows in that block
     sh = 0
     r = first_val_row_cons_sh
     while r < df.shape[0]:
         val_min = df.iat[r, min_col_cons_sh]
         val_max = df.iat[r, max_col_cons_sh]
-        if (isinstance(val_min, float) or isinstance(val_min, int)) and not pd.isna(val_min):
+        if (isinstance(val_min, (float, int))) and not pd.isna(val_min):
             base_min_cons[sh] = int(val_min)
             base_max_cons[sh] = int(val_max)
             sh += 1
             r += 1
         else:
             break
-    num_working_shifts = sh  # for dept A this will be 3 (E,D,L)
+    num_working_shifts = sh  # e.g. 3 (E,D,L)
 
-    # ----- ASSIGNMENTS PER SHIFT TYPE -----
+    # Assignments per shift type
     r_ass_sh = _find_row_starting_with(df, "NUMBER OF ASSIGNMENTS PER SHIFT TYPE")
     header_row_ass_sh = r_ass_sh + 1
     first_val_row_ass_sh = header_row_ass_sh + 1
@@ -437,13 +404,12 @@ def read_monthly_roster_constraints():
 
     base_min_shift = {}
     base_max_shift = {}
-
     sh = 0
     r = first_val_row_ass_sh
     while r < df.shape[0] and sh < num_working_shifts:
         val_min = df.iat[r, min_col_ass_sh]
         val_max = df.iat[r, max_col_ass_sh]
-        if (isinstance(val_min, float) or isinstance(val_min, int)) and not pd.isna(val_min):
+        if (isinstance(val_min, (float, int))) and not pd.isna(val_min):
             base_min_shift[sh] = int(val_min)
             base_max_shift[sh] = int(val_max)
             sh += 1
@@ -451,7 +417,7 @@ def read_monthly_roster_constraints():
         else:
             break
 
-    # ----- IDENTICAL WEEKEND CONSTRAINT -----
+    # Identical weekend
     r_ident = _find_row_starting_with(df, "IDENTICAL WEEKEND CONSTRAINT")
     val_row_ident = r_ident + 1
 
@@ -463,29 +429,24 @@ def read_monthly_roster_constraints():
             break
     ident_flag = 1 if (ident_value and ident_value.startswith("Y")) else 0
 
-    # ----- APPLY TO ALL NURSES -----
+    # Apply to all nurses
     for k in range(number_nurses):
-        # total assignments (scaled by employment rate)
         min_ass[k] = int(base_min_ass * nurse_percent_employment[k])
         max_ass[k] = int(base_max_ass * nurse_percent_employment[k])
 
-        # global consecutive working days
         min_cons_wrk[k] = base_min_cons_wrk
         max_cons_wrk[k] = base_max_cons_wrk
         extreme_max_cons_wrk = 10
         extreme_min_cons_wrk = 1
 
-        # per-shift rules for the working shifts we actually have (0..num_working_shifts-1)
         for sh in range(num_working_shifts):
             min_cons[k][sh] = base_min_cons[sh]
             max_cons[k][sh] = base_max_cons[sh]
             extreme_max_cons[k][sh] = 10
             extreme_min_cons[k][sh] = 1
-
             min_shift[k][sh] = base_min_shift[sh]
             max_shift[k][sh] = base_max_shift[sh]
 
-        # for any remaining shifts (night, free, etc.): no requirements
         for sh in range(num_working_shifts, SHIFTS):
             min_cons[k][sh] = 0
             max_cons[k][sh] = 0
@@ -496,29 +457,19 @@ def read_monthly_roster_constraints():
 
         identical[k] = ident_flag
 
-
-
 def read_monthly_roster_from_excel():
     """
     Read the monthly roster from Excel and fill monthly_roster.
 
-    Excel:
-      - file: CASE_E_input.xlsx (same folder as this .py)
-      - sheet: 'MonthlyRoster_<department>', e.g. 'MonthlyRoster_A'
-      - columns:
-          NurseID, Day1, Day2, ..., DayN
-      - Day* cells = external shift codes (same numbering as cyclic input)
+    Sheet: 'Case_E_MonthlyRoster_<department>'
+      columns: Personnel Number (optional), Day1..DayN
+      Day*: shift codes (0..4)
     """
     global monthly_roster, number_nurses, number_days
 
-    excel_file = BASE_DIR / "CASE_E_input.xlsx"
     sheet_name = f"Case_E_MonthlyRoster_{department}"
+    df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
 
-    df = pd.read_excel(excel_file, sheet_name=sheet_name)
-
- 
-
-    # OPTIONAL: check that Personnel Number order matches preferences
     if "Personnel Number" in df.columns:
         for k in range(min(number_nurses, len(df))):
             roster_id = str(df.iloc[k]["Personnel Number"])
@@ -528,21 +479,15 @@ def read_monthly_roster_from_excel():
                     f"prefs PN = {personnel_number[k]}, roster PN = {roster_id}"
                 )
 
-
-
-    # Identify day columns
     day_cols = [c for c in df.columns if str(c).lower().startswith("day")]
     if not day_cols:
-        raise ValueError(
-            f"No Day* columns found in sheet {sheet_name} of {excel_file}"
-        )
+        raise ValueError(f"No Day* columns found in sheet {sheet_name} of {EXCEL_FILE}")
 
     excel_days = len(day_cols)
     if excel_days != number_days:
         print(
             f"WARNING: code expects {number_days} days, "
-            f"but Excel monthly roster has {excel_days} days. "
-            f"Using {excel_days} from Excel."
+            f"but Excel monthly roster has {excel_days} days. Using {excel_days}."
         )
         number_days = excel_days
 
@@ -557,45 +502,25 @@ def read_monthly_roster_from_excel():
             f"Ignoring extra rows."
         )
 
-    # Fill monthly_roster using internal shift encoding
     for k in range(number_nurses):
         for d_idx, col in enumerate(day_cols):
-            code = int(df.iloc[k][col])        # 0..4 = E,D,L,N,F
-            monthly_roster[k][d_idx] = code    # store directly
-
+            code = int(df.iloc[k][col])        # 0..4
+            monthly_roster[k][d_idx] = code
 
 def read_input():
-    """
-    Read all input files and initialise data structures.
-    Equivalent of C++ read_input().
-    """
-    global cyclic_roster, number_shifts
-
+    """Read all input and initialise data structures."""
+    global number_shifts
     read_shift_system()
     read_cyclic_roster()
     read_personnel_characteristics()
     read_monthly_roster_constraints()
+    number_shifts = SHIFTS
 
-    # 4) force number of shifts in algorithm to 5 (E, D, L, N, off)
-    number_shifts = 5
-
-def shift_decoding(shift_code: int) -> int:
-    """
-    Return the index in `shift` that has the given encoded shift_code.
-    If not found, return -1.
-    """
-    for idx in range(number_shifts):
-        if shift[idx] == shift_code:
-            return idx
-    return -1
-
-import os  # at top with the other imports if you want, optional
 
 
 def print_output():
     """
-    Print the monthly roster in the student's original shift numbering.
-    Equivalent of C++ print_output().
+    Print the monthly roster to txt and return DataFrame (labels E/D/L/N/F).
     """
     txt_filename = f"Monthly_Roster_dpt_{department}.txt"
 
@@ -603,28 +528,23 @@ def print_output():
         for k in range(number_nurses):
             f.write(f"{personnel_number[k]}\t")
             for i in range(number_days):
-                code = monthly_roster[k][i]  # 0..4 = E,D,L,N,F
+                code = monthly_roster[k][i]
                 f.write(f"{code}\t")
             f.write("\n")
 
-
     print(f"Monthly roster written to {txt_filename}")
 
-    #-----Excel output-----
-
-    data = {}
-    data["Personnel Number"] = [personnel_number[k] for k in range(number_nurses)]
-
+    data = {"Personnel Number": [personnel_number[k] for k in range(number_nurses)]}
     for d in range(number_days):
-        colname = f"Day{d+1}"
+        colname = f"Day{d + 1}"
         col = []
         for k in range(number_nurses):
             code = monthly_roster[k][d]
             col.append(SHIFT_LABELS.get(code, code))
         data[colname] = col
 
-    df = pd.DataFrame(data)
-    return df
+    return pd.DataFrame(data)
+
 
 
 def evaluate_line_of_work(nurse_idx: int, slack_j: int = 0):
@@ -634,15 +554,12 @@ def evaluate_line_of_work(nurse_idx: int, slack_j: int = 0):
     Updates:
       - violations[0..4]
       - scheduled[type][day][shift]
-      - (internally uses count_shift, etc.)
-    `slack_j` corresponds to the `+ j` tolerances in the C++ code.
     """
     global count_ass, count_cons_wrk, count_cons, count_shift
 
     i = nurse_idx
     j = slack_j
 
-    # reset counters
     hh = 0
     count_ass = 0
     count_cons_wrk = 0
@@ -650,13 +567,10 @@ def evaluate_line_of_work(nurse_idx: int, slack_j: int = 0):
     for l in range(number_shifts):
         count_shift[l] = 0
 
-    # day 0
+    # Day 0
     a = monthly_roster[i][0]
-
-    # preference cost
     violations[0] += pref[i][0][a]
 
-    # working day? (0..3 = work, 4 = day off)
     if a < 4:
         count_ass += 1
         count_cons_wrk += 1
@@ -666,42 +580,32 @@ def evaluate_line_of_work(nurse_idx: int, slack_j: int = 0):
     kk = nurse_type[i]
     scheduled[kk][0][a] += 1
 
-    # remaining days
+    # Remaining days
     for k in range(1, number_days):
         h1 = monthly_roster[i][k]
         h2 = monthly_roster[i][k - 1]
 
-        # record schedule
         scheduled[kk][k][h1] += 1
-
-        # add preference cost
         violations[0] += pref[i][k][h1]
 
-        # min/max assignments (total working days)
         if h1 < 4:
             count_ass += 1
-
         count_shift[h1] += 1
 
-        # consecutive working days
         if h1 < 4:
             count_cons_wrk += 1
         elif h1 == 4 and h2 < 4:
-            # just ended a block of consecutive work days
             if count_cons_wrk > max_cons_wrk[i] + j:
                 violations[1] += 1
             count_cons_wrk = 0
 
-        # consecutive same-shift days
         if h1 != h2:
-            # ended block of same shift type
             if count_cons > max_cons[i][h2] + j:
                 violations[2] += 1
-            count_cons = 1  # start new block with h1
+            count_cons = 1
         else:
             count_cons += 1
 
-    # after last day: check min/max assignments
     if count_ass < min_ass[i]:
         violations[3] += 1
     if count_ass > max_ass[i]:
@@ -710,14 +614,11 @@ def evaluate_line_of_work(nurse_idx: int, slack_j: int = 0):
 
 def evaluate_solution():
     """
-    Evaluate the current monthly_roster:
+    Evaluate the current monthly_roster.
 
-      - Reset counters
-      - Call evaluate_line_of_work() for each nurse
-      - Write txt violations report
-      - Return (df_summary, df_staffing) for Excel output
+    Returns:
+      df_summary, df_staffing
     """
-    # Reset scheduled and violations
     for kk in range(number_types):
         for day in range(number_days):
             for sh in range(number_shifts):
@@ -726,12 +627,9 @@ def evaluate_solution():
     for idx in range(20):
         violations[idx] = 0
 
-    # Evaluate each nurse (uses global i inside evaluate_line_of_work)
     for nurse_idx in range(number_nurses):
         evaluate_line_of_work(nurse_idx)
 
-
-    # ---------- TXT OUTPUT ----------
     txt_filename = BASE_DIR / f"Violations_dpt_{department}.txt"
     with open(txt_filename, "w") as f:
         f.write(f"The total preference score is {violations[0]}.\n")
@@ -759,18 +657,17 @@ def evaluate_solution():
                 required = req[day][sh]
                 if total_scheduled < required:
                     f.write(
-                        f"There are too few nurses in shift {sh} on day {day+1}: "
+                        f"There are too few nurses in shift {sh} on day {day + 1}: "
                         f"{total_scheduled} < {required}.\n"
                     )
                 elif total_scheduled > required:
                     f.write(
-                        f"There are too many nurses in shift {sh} on day {day+1}: "
+                        f"There are too many nurses in shift {sh} on day {day + 1}: "
                         f"{total_scheduled} > {required}.\n"
                     )
 
     print(f"Violations txt written to {txt_filename}")
 
-    # ---------- SUMMARY DATAFRAME ----------
     df_summary = pd.DataFrame([{
         "TotalPreferenceScore": violations[0],
         "MaxConsWorkViol": violations[1],
@@ -779,7 +676,6 @@ def evaluate_solution():
         "MaxAssignViol": violations[4],
     }])
 
-    # ---------- STAFFING VIOLATIONS DATAFRAME ----------
     staffing_rows = []
     for day in range(number_days):
         for sh in range(number_shifts - 1):  # ignore free shift
@@ -798,7 +694,9 @@ def evaluate_solution():
     df_staffing = pd.DataFrame(staffing_rows)
     return df_summary, df_staffing
 
-# Weights from the Algo.txt
+
+# Objective 
+
 WEIGHT_WAGE     = 0.2
 WEIGHT_NURSE    = 10.0
 WEIGHT_PATIENT  = 2.0
@@ -808,47 +706,30 @@ def compute_components(roster):
     """
     Compute (wage_cost, nurse_cost, patient_cost) for a given roster.
 
-    roster: 2D list [nurse][day] with shift codes 0..4 (E,D,L,N,F).
-
-    Returns:
-        wage_cost, nurse_cost, patient_cost
+    roster: 2D list [nurse][day] with shift codes 0..4.
     """
-
     wage_cost = 0.0
     nurse_cost = 0.0
     patient_cost = 0.0
 
-    # ---------------- 1) Wage cost ----------------
-    # For each worked shift (0..3) we add type/weekday/weekend cost.
+    # 1) Wage cost
     for n in range(number_nurses):
-        # detect if nurse is actually scheduled in the department (not all off)
         works_anything = any(roster[n][d] < 4 for d in range(number_days))
         if not works_anything:
-            # "when a nurse is assigned to a line of work containing only zeros,
-            # the nurse does not work in the department and penalties are not calculated"
             continue
 
-        t = nurse_type[n]   # 0 or 1
-
+        t = nurse_type[n]
         for d in range(number_days):
             s = roster[n][d]
-            if s < 4:  # working day
+            if s < 4:
                 weekend_flag = is_weekend(d)
+                if t == 0:
+                    wage_cost += WAGE_TYPE1_WEEKEND if weekend_flag else WAGE_TYPE1_WEEKDAY
+                else:
+                    wage_cost += WAGE_TYPE2_WEEKEND if weekend_flag else WAGE_TYPE2_WEEKDAY
 
-                if t == 0:  # type 1
-                    if weekend_flag:
-                        wage_cost += WAGE_TYPE1_WEEKEND
-                    else:
-                        wage_cost += WAGE_TYPE1_WEEKDAY
-                else:       # type 2
-                    if weekend_flag:
-                        wage_cost += WAGE_TYPE2_WEEKEND
-                    else:
-                        wage_cost += WAGE_TYPE2_WEEKDAY
-
-    # ---------------- 2) Patient satisfaction (as cost) ----------------
-    # (a) Penalty when nurses change shifts a lot  -> continuity within line of work
-    SHIFT_CHANGE_PEN = 1.0   # tune
+    # 2) Patient satisfaction (as cost)
+    SHIFT_CHANGE_PEN = 1.0
     for n in range(number_nurses):
         works_anything = any(roster[n][d] < 4 for d in range(number_days))
         if not works_anything:
@@ -857,57 +738,42 @@ def compute_components(roster):
         for d in range(1, number_days):
             s_prev = roster[n][d - 1]
             s_curr = roster[n][d]
-            # Only count changes between working shifts (exclude free)
             if s_prev < 4 and s_curr < 4 and s_prev != s_curr:
                 patient_cost += SHIFT_CHANGE_PEN
 
-    # (b) Penalty when requirements are not met (compare with req[d][shift])
-    UNDER_PEN = 1000.0  # very high
-    OVER_PEN  = 100.0   # smaller
-
+    UNDER_PEN = 1000.0
+    OVER_PEN = 100.0
     for d in range(number_days):
-        for s in range(number_shifts - 1):  # 0..3 E,D,L,N
-            scheduled = 0
-            for n in range(number_nurses):
-                if roster[n][d] == s:
-                    scheduled += 1
-            diff = scheduled - req[d][s]
+        for s in range(number_shifts - 1):
+            scheduled_count = sum(roster[n][d] == s for n in range(number_nurses))
+            diff = scheduled_count - req[d][s]
             if diff < 0:
                 patient_cost += UNDER_PEN * (-diff)
             elif diff > 0:
                 patient_cost += OVER_PEN * diff
 
-    # ---------------- 3) Nurse satisfaction (as cost) ----------------
-    # Include:
-    # - Late followed by Early penalty
-    # - More than 5 consecutive working days
-    # - Wrong total shifts vs 20/15/10 rule
-    # - Individual preferences pref[n][d][s] (only when nurse works at all)
-
-    LATE_SHIFT = 2   # from your encoding: 0=E,1=D,2=L,3=N,4=F
+    # 3) Nurse satisfaction (as cost)
+    LATE_SHIFT = 2
     EARLY_SHIFT = 0
-    LATE_EARLY_PEN = 50.0   # high penalty for L->E
-
-    CONS_WORK_LIMIT = 5     # "no nurse should work more than 5 days in a row"
-    CONS_WORK_PEN   = 50.0
-
-    ASSIGN_PEN      = 10.0  # penalty per deviation from target shifts
-    PREF_PEN        = 1.0   # scalar on preference matrix
+    LATE_EARLY_PEN = 50.0
+    CONS_WORK_LIMIT = 5
+    CONS_WORK_PEN = 50.0
+    ASSIGN_PEN = 10.0
+    PREF_PEN = 1.0
 
     for n in range(number_nurses):
         works_anything = any(roster[n][d] < 4 for d in range(number_days))
         if not works_anything:
-            # no wages, no penalties for this nurse
             continue
 
-        # (1) Late → Early transitions
+        # Late → Early transitions
         for d in range(1, number_days):
             prev_s = roster[n][d - 1]
             curr_s = roster[n][d]
             if prev_s == LATE_SHIFT and curr_s == EARLY_SHIFT:
                 nurse_cost += LATE_EARLY_PEN
 
-        # (2) Max 5 consecutive working days
+        # Max consecutive working days
         cons = 0
         for d in range(number_days + 1):
             if d < number_days and roster[n][d] < 4:
@@ -917,46 +783,38 @@ def compute_components(roster):
                     nurse_cost += CONS_WORK_PEN * (cons - CONS_WORK_LIMIT)
                 cons = 0
 
-        # (3) Target number of shifts based on employment
-        # FTE -> 20, 0.75 -> 15, 0.5 -> 10
-        emp = nurse_percent_employment[n]  # e.g. 1.0, 0.75, 0.5
+        # Target number of shifts based on employment
+        emp = nurse_percent_employment[n]
         target_shifts = 20.0 * emp
-
-        worked = sum(1 for d in range(number_days) if roster[n][d] < 4)
+        worked = sum(roster[n][d] < 4 for d in range(number_days))
         nurse_cost += ASSIGN_PEN * abs(worked - target_shifts)
 
-        # (4) Individual preferences (only when working)
+        # Individual preferences
         for d in range(number_days):
             s = roster[n][d]
-            if s < 4:  # working shift
+            if s < 4:
                 nurse_cost += PREF_PEN * pref[n][d][s]
 
     return wage_cost, nurse_cost, patient_cost
 
 
 def compute_objective(roster):
-    """
-    Weighted objective: 0.2 * totalWages + 10 * NurseSatisfaction + 2 * PatientSatisfaction
-    All three components are already costs (higher = worse).
-    """
+    """Weighted objective: 0.2 * wages + 10 * nurse + 2 * patient (all are costs)."""
     wage_cost, nurse_cost, patient_cost = compute_components(roster)
     return (
-        WEIGHT_WAGE    * wage_cost +
-        WEIGHT_NURSE   * nurse_cost +
+        WEIGHT_WAGE * wage_cost +
+        WEIGHT_NURSE * nurse_cost +
         WEIGHT_PATIENT * patient_cost
     )
 
+
 def random_neighbor(roster):
     """
-    Make a small change:
-    - pick a random day
-    - pick 2 random nurses
-    - swap their assignments on that day
+    Small move: pick a random day and two random nurses, swap their assignments.
 
     Returns a NEW roster (deep copy).
     """
     new_roster = deepcopy(roster)
-
     if number_nurses < 2:
         return new_roster
 
@@ -966,12 +824,9 @@ def random_neighbor(roster):
     while n2 == n1:
         n2 = random.randrange(number_nurses)
 
-    s1 = new_roster[n1][d]
-    s2 = new_roster[n2][d]
-    new_roster[n1][d] = s2
-    new_roster[n2][d] = s1
-
+    new_roster[n1][d], new_roster[n2][d] = new_roster[n2][d], new_roster[n1][d]
     return new_roster
+
 
 def simulated_annealing(initial_roster,
                         T_start=1000.0,
@@ -980,9 +835,8 @@ def simulated_annealing(initial_roster,
                         iters_per_T=200):
     """
     Standard simulated annealing:
-    - start from initial_roster
-    - occasionally accept worse moves with probability exp(-delta/T)
-    - gradually cool down
+      - occasionally accept worse moves with probability exp(-delta/T)
+      - gradually cool down
     """
     current = deepcopy(initial_roster)
     best = deepcopy(initial_roster)
@@ -991,7 +845,6 @@ def simulated_annealing(initial_roster,
     best_cost = current_cost
 
     T = T_start
-
     while T > T_min:
         for _ in range(iters_per_T):
             neighbor = random_neighbor(current)
@@ -999,41 +852,26 @@ def simulated_annealing(initial_roster,
             delta = neighbor_cost - current_cost
 
             if delta < 0:
-                # better → accept always
-                current = neighbor
-                current_cost = neighbor_cost
+                current, current_cost = neighbor, neighbor_cost
                 if neighbor_cost < best_cost:
                     best = deepcopy(neighbor)
                     best_cost = neighbor_cost
             else:
-                # worse → accept with probability
                 p = math.exp(-delta / T)
                 if random.random() < p:
-                    current = neighbor
-                    current_cost = neighbor_cost
-
-        T *= alpha  # cool down
+                    current, current_cost = neighbor, neighbor_cost
+        T *= alpha
 
     return best, best_cost
 
-
-
 def procedure():
     """
-    Construct the monthly roster for department A.
-
-    Steps:
-    1) Read the input schedule from Excel (Case_E_MonthlyRoster_A).
-    2) Use simulated annealing to improve it w.r.t. weighted objective:
-         0.2 * Wage + 10 * NurseSat + 2 * PatientSat
-    3) Store the best roster back into global monthly_roster.
+    Construct and improve the monthly roster for `department` using SA.
     """
     global monthly_roster
 
-    # 1) start from the Excel monthly roster
     read_monthly_roster_from_excel()
 
-    # convert to plain list-of-lists for SA
     initial_roster = [
         [monthly_roster[n][d] for d in range(number_days)]
         for n in range(number_nurses)
@@ -1047,7 +885,6 @@ def procedure():
     print(f"  Patient_cost   = {p0:.2f}")
     print(f"  Objective      = {obj0:.2f}")
 
-    # 2) run simulated annealing
     best_roster, best_obj = simulated_annealing(initial_roster)
 
     w1, n1, p1 = compute_components(best_roster)
@@ -1057,53 +894,37 @@ def procedure():
     print(f"  Patient_cost   = {p1:.2f}")
     print(f"  Objective      = {best_obj:.2f}")
 
-    # 3) copy best_roster back into the global monthly_roster
     for n in range(number_nurses):
         for d in range(number_days):
             monthly_roster[n][d] = best_roster[n][d]
 
 
 def add_nurse_to_day_shift(nurse_id: int, day_id: int, shift_id: int):
-    """
-    Assign nurse `nurse_id` to `shift_id` on `day_id` in the internal encoding.
-    """
+    """Assign nurse to shift on given day (internal encoding)."""
     monthly_roster[nurse_id][day_id] = shift_id
-
-
-import time
-import random
 
 
 def main():
     global number_days, weekend, department, elapsed_time
 
-    # GENERAL CHARACTERISTICS
-    number_days = 28           # planning horizon
-    weekend = 7                # first Sunday on day 7
-    department = "A"           # adapt if needed: "A", "B", "C", "D"
+    number_days = 28
+    weekend = 7
+    department = "A"
 
-    # INITIALISATION
     seed = 1000
     random.seed(seed)
 
     debug_list_sheets()
-
-    # READ INPUT
     read_input()
 
-    # Construct monthly roster and measure time
     start_time = time.perf_counter()
     procedure()
     elapsed_time = time.perf_counter() - start_time
     print(f"CPU time for procedure(): {elapsed_time:.6f} seconds")
 
-    # 1) TXT + DataFrame for monthly roster
     df_roster = print_output()
-
-    # 2) TXT + DataFrames for evaluation
     df_summary, df_staffing = evaluate_solution()
 
-    # 3) Write everything into ONE Excel file with multiple sheets
     output_file = BASE_DIR / f"CASE_E_output_{department}.xlsx"
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         df_roster.to_excel(writer, sheet_name="MonthlyRoster", index=False)
@@ -1114,5 +935,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
