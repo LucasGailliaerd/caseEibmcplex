@@ -42,10 +42,10 @@ def shift_decoding(code: int) -> str:
 
 
 # Objective weights
-W_PREF   = 1.0      # nurse dissatisfaction (preference score)
-W_UNDER  = 200.0   # penalty per nurse missing (understaffing)
-W_OVER   = 100.0    # penalty per nurse extra (overstaffing)
-W_ASSIGN = 200     # penalty per shifts beyond min/max total assignments
+W_PREF   = 20      # nurse dissatisfaction (preference score)
+W_UNDER  = 10000.0   # penalty per nurse missing (understaffing)
+W_OVER   = 1000.0    # penalty per nurse extra (overstaffing)
+W_ASSIGN = 5000     # penalty per shifts beyond min/max total assignments
 W_CONS   = 100    # penalty for violating consecutive-day limits
 
 # Wage parameters (€/shift), indexed as [nurse_type][shift_code 0..3]
@@ -699,6 +699,36 @@ def evaluate_solution():
     df_staffing = pd.DataFrame(staffing_rows)
     return df_summary, df_staffing
 
+def count_consecutive_shifttype_violations(roster):
+    """
+    Count how many times the 'max_cons per shift type' rule is violated,
+    in the same spirit as evaluate_line_of_work, but for an arbitrary roster.
+    """
+    total_viol = 0
+
+    for i in range(number_nurses):
+        count_cons = 0
+        prev_s = roster[i][0]
+
+        for k in range(1, number_days + 1):
+            if k < number_days:
+                s = roster[i][k]
+            else:
+                s = -1  # force closure at end
+
+            if s != prev_s:
+                # end of block of prev_s
+                if prev_s < 4 and count_cons > max_cons[i][prev_s]:
+                    total_viol += (count_cons - max_cons[i][prev_s])
+                count_cons = 1 if (s < 4) else 0
+            else:
+                if s < 4:
+                    count_cons += 1
+
+            prev_s = s
+
+    return total_viol
+
 
 # Objective 
 
@@ -716,6 +746,10 @@ def compute_components(roster):
     wage_cost = 0.0
     nurse_cost = 0.0
     patient_cost = 0.0
+    # local weights for nurse satisfaction sub-components
+    FAIRNESS_PEN = 10.0     # soft pull to target_shifts
+    PREF_PEN = 20           # already defined below, but better to keep together
+
 
         # 1) Wage cost
     for n in range(number_nurses):
@@ -758,23 +792,32 @@ def compute_components(roster):
     # 3) Nurse satisfaction (as cost)
     LATE_SHIFT = 2
     EARLY_SHIFT = 0
-    LATE_EARLY_PEN = 200
+    NIGHT_SHIFT = 3
+
+    LATE_EARLY_PEN = 100
+    NIGHT_REST_PEN = 1000
+
+    WEEKLY_MAX_DAYS = 6
+    WEEKLY_WORK_PEN = 200.0
+
     CONS_WORK_LIMIT = 5
     CONS_WORK_PEN = 200
-    ASSIGN_PEN = 50
-    PREF_PEN = 1.0
-
+    
     for n in range(number_nurses):
         works_anything = any(roster[n][d] < 4 for d in range(number_days))
         if not works_anything:
             continue
 
-        # Late → Early transitions
+        # Succession
         for d in range(1, number_days):
             prev_s = roster[n][d - 1]
             curr_s = roster[n][d]
+
             if prev_s == LATE_SHIFT and curr_s == EARLY_SHIFT:
                 nurse_cost += LATE_EARLY_PEN
+
+            if prev_s == NIGHT_SHIFT and curr_s in (EARLY_SHIFT, LATE_SHIFT):
+                nurse_cost += NIGHT_REST_PEN
 
         # Max consecutive working days
         cons = 0
@@ -788,9 +831,18 @@ def compute_components(roster):
 
         # Target number of shifts based on employment
         emp = nurse_percent_employment[n]
-        target_shifts = 20.0 * emp
+        target_shifts = 20 * emp
         worked = sum(roster[n][d] < 4 for d in range(number_days))
-        nurse_cost += ASSIGN_PEN * abs(worked - target_shifts)
+
+        nurse_cost += FAIRNESS_PEN * abs(worked - target_shifts)
+
+        # --- Hard-ish min/max assignments from Excel (real constraint) ---
+        if worked < min_ass[n]:
+            nurse_cost += W_ASSIGN * (min_ass[n] - worked)
+        elif worked > max_ass[n]:
+            nurse_cost += W_ASSIGN * (worked - max_ass[n])
+
+
 
         # Individual preferences
         for d in range(number_days):
@@ -798,50 +850,79 @@ def compute_components(roster):
             if s < 4:
                 nurse_cost += PREF_PEN * pref[n][d][s]
 
+    # 4) Extra penalty for per-shift-type consecutive violations (once per roster)
+    cons_shift_viol = count_consecutive_shifttype_violations(roster)
+    nurse_cost += W_CONS * cons_shift_viol
+
     return wage_cost, nurse_cost, patient_cost
 
-
+    
 def compute_objective(roster):
-    """Weighted objective: 0.2 * wages + 10 * nurse + 2 * patient (all are costs)."""
+    """Weighted objective."""
     wage_cost, nurse_cost, patient_cost = compute_components(roster)
+
     return (
         WEIGHT_WAGE * wage_cost +
         WEIGHT_NURSE * nurse_cost +
         WEIGHT_PATIENT * patient_cost
     )
 
-
 def random_neighbor(roster):
     """
-    Small move: pick a random day and two random nurses, swap their assignments.
-
-    Returns a NEW roster (deep copy).
+    Small move:
+      - pick a random day
+      - pick 2 random nurses
+      - swap their assignments on that day
+    Avoid swaps that create obvious max-assignment violations.
     """
     new_roster = deepcopy(roster)
     if number_nurses < 2:
         return new_roster
 
-    d = random.randrange(number_days)
-    n1 = random.randrange(number_nurses)
-    n2 = random.randrange(number_nurses)
-    while n2 == n1:
+    max_attempts = 50
+    attempts = 0
+
+    while attempts < max_attempts:
+        attempts += 1
+
+        d = random.randrange(number_days)
+        n1 = random.randrange(number_nurses)
         n2 = random.randrange(number_nurses)
+        while n2 == n1:
+            n2 = random.randrange(number_nurses)
 
-    new_roster[n1][d], new_roster[n2][d] = new_roster[n2][d], new_roster[n1][d]
-    return new_roster
+        # do swap
+        s1 = new_roster[n1][d]
+        s2 = new_roster[n2][d]
+        new_roster[n1][d], new_roster[n2][d] = s2, s1
 
+        # check max assignments for both nurses after swap
+        worked1 = sum(new_roster[n1][dd] < 4 for dd in range(number_days))
+        worked2 = sum(new_roster[n2][dd] < 4 for dd in range(number_days))
+
+        if worked1 <= max_ass[n1] and worked2 <= max_ass[n2]:
+            return new_roster  # acceptable neighbor
+
+        # revert and try another swap
+        new_roster[n1][d], new_roster[n2][d] = s1, s2
+
+    # fallback: if no acceptable neighbor found, return original roster
+    return deepcopy(roster)
 
 
 def simulated_annealing(initial_roster,
                         T_start=1000.0,
                         T_min=1e-3,
                         alpha=0.95,
-                        iters_per_T=1000):
+                        iters_per_T=1000,
+                        max_time_sec=None):
     """
     Standard simulated annealing:
       - occasionally accept worse moves with probability exp(-delta/T)
       - gradually cool down
     """
+    start_time = time.perf_counter()
+
     current = deepcopy(initial_roster)
     best = deepcopy(initial_roster)
 
@@ -851,6 +932,13 @@ def simulated_annealing(initial_roster,
     T = T_start
     while T > T_min:
         for _ in range(iters_per_T):
+
+            if max_time_sec is not None:
+                elapsed = time.perf_counter() - start_time
+                if elapsed >= max_time_sec:
+                    print(f"Time limit of {max_time_sec:.1f} seconds reached. Returning best solution found.")
+                    return best, best_cost
+
             neighbor = random_neighbor(current)
             neighbor_cost = compute_objective(neighbor)
             delta = neighbor_cost - current_cost
@@ -889,7 +977,17 @@ def procedure():
     print(f"  Patient_cost   = {p0:.2f}")
     print(f"  Objective      = {obj0:.2f}")
 
-    best_roster, best_obj = simulated_annealing(initial_roster)
+    # 15 minutes = 900 seconds
+    TIME_LIMIT_SEC = 10 * 60
+
+    best_roster, best_obj = simulated_annealing(
+        initial_roster,
+        T_start=1000.0,
+        T_min=1e-3,
+        alpha=0.95,
+        iters_per_T=200,
+        max_time_sec=TIME_LIMIT_SEC,
+    )
 
     w1, n1, p1 = compute_components(best_roster)
     print("Best schedule metrics after SA:")
