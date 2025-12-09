@@ -46,7 +46,7 @@ W_PREF   = 700     # nurse dissatisfaction (preference score)
 W_UNDER  = 1000   # penalty per nurse missing (understaffing)
 W_OVER   = 100   # penalty per nurse extra (overstaffing)
 W_ASSIGN = 5000     # penalty per shifts beyond min/max total assignments
-W_CONS   = 2000    # penalty for violating consecutive-day limits
+W_CONS   = 5000    # penalty for violating consecutive-day limits
 
 # Wage parameters (€/shift), indexed as [nurse_type][shift_code 0..3]
 # nurse_type: 0 = type 1 nurse, 1 = type 2 nurse
@@ -845,8 +845,8 @@ def compute_components(roster):
 
     LATE_EARLY_PEN = 100
     NIGHT_REST_PEN = 1000
-    CONTRACT_MIN_PEN = 2000.0  # penalty per missing shift vs contract minimum
-    CONS_WORK_PEN = 500
+    CONTRACT_MIN_PEN = 10000.0  # penalty per missing shift vs contract minimum
+    CONS_WORK_PEN = 10000
     
     for n in range(number_nurses):
         works_anything = any(roster[n][d] < 4 for d in range(number_days))
@@ -963,35 +963,50 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
         # swap move (as before)
         ...
     elif r < p_swap + p_fix_block:
-        # --- BLOCK-BREAKING MOVE ---
-        n = random.randrange(number_nurses)
-        # find a shift type and a long block for this nurse
-        s = random.randrange(number_shifts - 1)  # ignore free
-        # scan for a block > max_cons[n][s]
-        limit = max_cons[n][s]
-        cons = 0
-        start = None
-        for d in range(number_days):
-            if new_roster[n][d] == s:
-                cons += 1
-                if cons == 1:
-                    start = d
-            else:
-                if cons > limit:
-                    # pick a random day inside this block and change it
-                    change_day = random.randint(start, start + cons - 1)
-                    possible = [x for x in range(number_shifts) if x != s]
-                    if possible:
-                        new_roster[n][change_day] = random.choice(possible)
-                    return new_roster
+        
+        # Search for any nurse and shift type with a violating block
+        violation_found = False
+        for n in random.sample(range(number_nurses), k=number_nurses):
+            for s in range(number_shifts - 1):  # iterate over each actual shift type (0..3)
+                limit = max_cons[n][s]
+                if limit <= 0:
+                    continue  # skip if no limit defined
                 cons = 0
-        # if we didn't find a violating block, just fall back to "simple change" move
-        n = random.randrange(number_nurses)
-        d = random.randrange(number_days)
-        old_shift = new_roster[n][d]
-        possible_shifts = [x for x in range(number_shifts) if x != old_shift]
-        if possible_shifts:
-            new_roster[n][d] = random.choice(possible_shifts)
+                start = None
+                for d in range(number_days + 1):  # include end sentinel
+                    if d < number_days and new_roster[n][d] == s:
+                        # building a block of shift s
+                        cons += 1
+                        if cons == 1:
+                            start = d
+                    else:
+                        # block ended
+                        if cons > limit:
+                            # Found a violation: break the block
+                            change_day = random.randint(start, start + cons - 1)
+                            # Change the shift on change_day to something else (preferably a non-violating option)
+                            possible_shifts = [x for x in range(number_shifts) if x != s]
+                            if possible_shifts:
+                                # Optionally, choose a shift that alleviates other issues (e.g., a day off or a shift with understaffing)
+                                new_roster[n][change_day] = random.choice(possible_shifts)
+                            violation_found = True
+                            break
+                        cons = 0
+                if violation_found:
+                    break
+            if violation_found:
+                break
+
+        if not violation_found:
+            # No consecutive-shift violation was found; fall back to a simple random change
+            n = random.randrange(number_nurses)
+            d = random.randrange(number_days)
+            old_shift = new_roster[n][d]
+            possible_shifts = [x for x in range(number_shifts) if x != old_shift]
+            if possible_shifts:
+                new_roster[n][d] = random.choice(possible_shifts)
+        # (return new_roster will follow)
+
     else:
         # simple change-coverage move
         ...
@@ -1003,7 +1018,7 @@ def simulated_annealing(initial_roster,
                         T_start=1000.0,
                         T_min=1e-3,
                         alpha=0.95,
-                        iters_per_T=200):
+                        iters_per_T=1000):
     current = deepcopy(initial_roster)
     best = deepcopy(initial_roster)
     current_cost = compute_objective(current)
@@ -1016,12 +1031,24 @@ def simulated_annealing(initial_roster,
             # --- draw a FEASIBLE neighbour (w.r.t. contract mins) ---
             attempts = 0
             neighbor = None
-            while attempts < 30:           # try up to 30 random moves
+            # --- Enhanced neighbor selection with consecutive constraint check ---
+            while attempts < 30:
                 candidate = random_neighbor(current)
-                if not violates_contract_min(candidate):
-                    neighbor = candidate
-                    break
-                attempts += 1
+                # Skip candidate if it breaks any hard constraints:
+                if violates_contract_min(candidate):
+                    attempts += 1
+                    continue
+                # Also ensure we don't increase consecutive shift-type violations
+                curr_viol = count_consecutive_shifttype_violations(current)
+                cand_viol = count_consecutive_shifttype_violations(candidate)
+                if cand_viol > curr_viol:
+                    # Candidate makes consecutive-shift violations worse – skip it
+                    attempts += 1
+                    continue
+                # Otherwise, accept this neighbor for cost evaluation
+                neighbor = candidate
+                break
+
 
             if neighbor is None:
                 # couldn't find a feasible neighbour this iteration
