@@ -48,7 +48,7 @@ W_UNDER  = 5000   # penalty per nurse missing (understaffing)
 W_OVER   = 500   # penalty per nurse extra (overstaffing)
 W_ASSIGN = 10000    # penalty per shifts beyond min/max total assignments
 W_CONS   = 20000    # penalty for violating consecutive-day limits
-W_FORBID = 100000  #penalty for scheduling when requirement is zero
+
 # Wage parameters (€/shift), indexed as [nurse_type][shift_code 0..3]
 # nurse_type: 0 = type 1 nurse, 1 = type 2 nurse
 WAGE_WEEKDAY = {
@@ -216,8 +216,8 @@ def read_shift_system():
     number_shifts = int(df.iat[1, 0])  # A2
     length = int(df.iat[1, 1])         # B2
 
-    r_start, c_start = _find_cell_containing(df, "START SHIFTS DEP A")
-    r_req, c_req = _find_cell_containing(df, "REQUIREMENTS DEP A")
+    r_start, c_start = _find_cell_containing(df, "START SHIFTS DEP D")
+    r_req, c_req = _find_cell_containing(df, "REQUIREMENTS DEP D")
 
     start_rows = [r_start + 1 + i for i in range(number_shifts)]
     req_rows = [r_req + 1 + i for i in range(number_shifts)]
@@ -912,25 +912,15 @@ def compute_components(roster):
                 patient_cost += SHIFT_CHANGE_PEN
 
     for d in range(number_days):
-        for s in range(number_shifts - 1):  # ignore F
+        for s in range(number_shifts - 1):
             scheduled_count = sum(roster[n][d] == s for n in range(number_nurses))
-            required = req[d][s]
-
-            # 1) Als requirement = 0, wil je ECHT niemand ingepland
-            if required == 0 and scheduled_count > 0:
-                # zware straf per onnodig ingeplande nurse
-                patient_cost += W_FORBID * scheduled_count
-                continue  # rest overslaan, want dit is al fout genoeg
-
-            # 2) Normale under/overstaffing logica
-            diff = scheduled_count - required
+            diff = scheduled_count - req[d][s]
             if diff < 0:
                 shortage = -diff
                 patient_cost += W_UNDER * (shortage ** 2)
             elif diff > 0:
                 surplus = diff
                 patient_cost += W_OVER * (surplus ** 2)
-
 
 
     # 3) Nurse satisfaction (as cost)
@@ -1229,7 +1219,7 @@ def main():
 
     number_days = 28
     weekend = 7
-    department = "A"
+    department = "D"
 
     seed = 1000
     random.seed(seed)
