@@ -1001,15 +1001,7 @@ def compute_components(roster):
     return wage_cost, nurse_cost, patient_cost
 
     
-def compute_objective(roster):
-    """Weighted objective."""
-    wage_cost, nurse_cost, patient_cost = compute_components(roster)
 
-    return (
-        WEIGHT_WAGE * wage_cost +
-        WEIGHT_NURSE * nurse_cost +
-        WEIGHT_PATIENT * patient_cost
-    )
 
 def violates_contract_min(roster) -> bool:
     """
@@ -1211,6 +1203,15 @@ def add_nurse_to_day_shift(nurse_id: int, day_id: int, shift_id: int):
     """Assign nurse to shift on given day (internal encoding)."""
     monthly_roster[nurse_id][day_id] = shift_id
 
+def compute_objective(roster):
+    """Weighted objective."""
+    wage_cost, nurse_cost, patient_cost = compute_components(roster)
+
+    return (
+        WEIGHT_WAGE * wage_cost +
+        WEIGHT_NURSE * nurse_cost +
+        WEIGHT_PATIENT * patient_cost
+    )
 
 
 def main():
