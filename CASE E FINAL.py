@@ -43,7 +43,7 @@ def shift_decoding(code: int) -> str:
 
 # Objective weights
 W_PREF   = 20      # nurse dissatisfaction (preference score)
-W_UNDER  = 10000.0   # penalty per nurse missing (understaffing)
+W_UNDER  = 1000.0   # penalty per nurse missing (understaffing)
 W_OVER   = 1000.0    # penalty per nurse extra (overstaffing)
 W_ASSIGN = 5000     # penalty per shifts beyond min/max total assignments
 W_CONS   = 100    # penalty for violating consecutive-day limits
@@ -512,6 +512,26 @@ def read_monthly_roster_from_excel():
             code = int(df.iloc[k][col])        # 0..4
             monthly_roster[k][d_idx] = code
 
+def debug_capacity_vs_demand():
+    total_required = 0
+    for d in range(number_days):
+        for s in range(number_shifts - 1):  # ignore F
+            total_required += req[d][s]
+
+    total_max_assign = sum(max_ass)
+    total_min_assign = sum(min_ass)
+
+    print("Total required assignments:", total_required)
+    print("Total min assignments:", total_min_assign)
+    print("Total max assignments:", total_max_assign)
+    if total_required > total_max_assign:
+        print(">> INFEASIBLE: demand exceeds total max assignments.")
+    elif total_required < total_min_assign:
+        print(">> OVERCAPACITY: even min_ass exceeds demand.")
+    else:
+        print(">> Globally feasible in terms of total capacity.")
+
+
 def read_input():
     """Read all input and initialise data structures."""
     global number_shifts
@@ -785,9 +805,12 @@ def compute_components(roster):
             scheduled_count = sum(roster[n][d] == s for n in range(number_nurses))
             diff = scheduled_count - req[d][s]
             if diff < 0:
-                patient_cost += W_UNDER * (-diff)
+                shortage = -diff
+                patient_cost += W_UNDER * (shortage ** 2)
             elif diff > 0:
-                patient_cost += W_OVER * diff
+                surplus = diff
+                patient_cost += W_OVER * (surplus ** 2)
+
 
     # 3) Nurse satisfaction (as cost)
     LATE_SHIFT = 2
@@ -796,9 +819,6 @@ def compute_components(roster):
 
     LATE_EARLY_PEN = 100
     NIGHT_REST_PEN = 1000
-
-    WEEKLY_MAX_DAYS = 6
-    WEEKLY_WORK_PEN = 200.0
 
     CONS_WORK_LIMIT = 5
     CONS_WORK_PEN = 200
@@ -1018,6 +1038,7 @@ def main():
 
     debug_list_sheets()
     read_input()
+    debug_capacity_vs_demand()
 
     start_time = time.perf_counter()
     procedure()
