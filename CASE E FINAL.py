@@ -11,6 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent
 excel_file = BASE_DIR / "CASE_E_input.xlsx"
 
 SHIFT_LABELS = {0: "E", 1: "D", 2: "L", 3: "N", 4: "F"}
+FREE_SHIFT = max(SHIFT_LABELS.keys())
 
 def shift_decoding(code: int) -> str:
     """
@@ -42,11 +43,11 @@ def shift_decoding(code: int) -> str:
 
 
 # Objective weights
-W_PREF   = 700     # nurse dissatisfaction (preference score)
-W_UNDER  = 1000   # penalty per nurse missing (understaffing)
-W_OVER   = 100   # penalty per nurse extra (overstaffing)
-W_ASSIGN = 5000     # penalty per shifts beyond min/max total assignments
-W_CONS   = 5000    # penalty for violating consecutive-day limits
+W_PREF   = 20    # nurse dissatisfaction (preference score)
+W_UNDER  = 5000   # penalty per nurse missing (understaffing)
+W_OVER   = 500   # penalty per nurse extra (overstaffing)
+W_ASSIGN = 10000    # penalty per shifts beyond min/max total assignments
+W_CONS   = 20000    # penalty for violating consecutive-day limits
 
 # Wage parameters (€/shift), indexed as [nurse_type][shift_code 0..3]
 # nurse_type: 0 = type 1 nurse, 1 = type 2 nurse
@@ -168,6 +169,35 @@ def is_weekend(day_idx: int) -> bool:
     """ Return True if day_idx (0-based) is Saturday or Sunday."""
     d1 = day_idx + 1  # convert to 1-based
     return (d1 % 7 == 6) or (d1 % 7 == 0)
+
+def max_allowed_workblock(n: int) -> int:
+    emp = nurse_percent_employment[n]
+    if emp >= 0.99:
+        return 5
+    elif emp >= 0.74:
+        return 4
+    return 3
+
+def find_long_workblock(roster, n: int):
+    if n >= len(roster):
+        raise IndexError(f"Nurse index {n} out of bounds for roster")
+
+    max_len = max_allowed_workblock(n)
+    cons = 0
+    start = None
+
+    for d in range(number_days + 1):
+        if d < number_days and roster[n][d] < FREE_SHIFT:
+            cons += 1
+            if cons == 1:
+                start = d
+        else:
+            if cons > max_len:
+                return start, cons
+            cons = 0
+            start = None
+
+    return None
 
 # Input reading
 def read_shift_system():
@@ -470,7 +500,25 @@ def read_monthly_roster_constraints():
         max_shift[k][sh] = 9999
 
 
-        identical[k] = ident_flag
+    identical[k] = ident_flag
+
+def print_monthly_roster_constraints():
+    print("=== Monthly Roster Constraints Per Nurse ===")
+    for k in range(number_nurses):
+        print(f"\nNurse {k+1} — Employment %: {nurse_percent_employment[k]:.2f}")
+        print(f"  Assignment Limits: min = {min_ass[k]}, max = {max_ass[k]}")
+        print(f"  Consecutive Working Days: min = {min_cons_wrk[k]}, max = {max_cons_wrk[k]}")
+        print("  Consecutive Shifts Per Type:")
+        for s in range(SHIFTS):
+            label = SHIFT_LABELS.get(s, f"Shift{s}")
+            print(f"    {label}: min = {min_cons[k][s]}, max = {max_cons[k][s]} (extreme max = {extreme_max_cons[k][s]})")
+        print("  Shift Type Assignment Limits:")
+        for s in range(SHIFTS):
+            label = SHIFT_LABELS.get(s, f"Shift{s}")
+            print(f"    {label}: min = {min_shift[k][s]}, max = {max_shift[k][s]}")
+        print(f"  Identical Weekend Constraint: {'YES' if identical[k] else 'NO'}")
+    print("\n==========================================================")
+
 
 def read_monthly_roster_from_excel():
     """
@@ -530,7 +578,7 @@ def debug_capacity_vs_demand():
 
     total_max_assign = sum(max_ass)
     total_min_assign = sum(min_ass)
-
+    print_monthly_roster_constraints()
     print("Total required assignments:", total_required)
     print("Total min assignments:", total_min_assign)
     print("Total max assignments:", total_max_assign)
@@ -582,7 +630,6 @@ def print_output():
                 code = monthly_roster[k][i]
                 f.write(f"{code}\t")
             f.write("\n")
-
     print(f"Monthly roster written to {txt_filename}")
 
     data = {"Personnel Number": [personnel_number[k] for k in range(number_nurses)]}
@@ -792,9 +839,8 @@ def compute_components(roster):
     wage_cost = 0.0
     nurse_cost = 0.0
     patient_cost = 0.0
-    # local weights for nurse satisfaction sub-components
-    FAIRNESS_PEN = 10.0     # soft pull to target_shifts
-    PREF_PEN = 20           # already defined below, but better to keep together
+    
+    PREF_PEN = 1          # already defined below, but better to keep together
 
 
     # 1) Wage cost
@@ -842,11 +888,13 @@ def compute_components(roster):
     LATE_SHIFT = 2
     EARLY_SHIFT = 0
     NIGHT_SHIFT = 3
+    
 
-    LATE_EARLY_PEN = 100
-    NIGHT_REST_PEN = 1000
-    CONTRACT_MIN_PEN = 10000.0  # penalty per missing shift vs contract minimum
-    CONS_WORK_PEN = 10000
+
+    LATE_EARLY_PEN = 1
+    NIGHT_REST_PEN = 1
+    CONTRACT_MIN_PEN = 1  # penalty per missing shift vs contract minimum
+    CONS_WORK_PEN = 1
     
     for n in range(number_nurses):
         works_anything = any(roster[n][d] < 4 for d in range(number_days))
@@ -957,6 +1005,17 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
     if number_nurses < 1 or number_days < 1:
         return new_roster
 
+    # 1️⃣ Eerst: probeer een te lang werkblok te breken
+    for n in random.sample(range(number_nurses), k=number_nurses):
+        block = find_long_workblock(new_roster, n)
+        if block is not None:
+            start, length = block
+            # kies een dag binnen dat te lange blok om vrij te maken
+            d = random.randint(start, start + length - 1)
+            new_roster[n][d] = 4  # 4 = Free
+            return new_roster
+
+    # 2️⃣ Pas als er geen illegale werkblokken zijn: je oude moves
     r = random.random()
 
     if r < p_swap:
@@ -987,7 +1046,6 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
                             # Change the shift on change_day to something else (preferably a non-violating option)
                             possible_shifts = [x for x in range(number_shifts) if x != s]
                             if possible_shifts:
-                                # Optionally, choose a shift that alleviates other issues (e.g., a day off or a shift with understaffing)
                                 new_roster[n][change_day] = random.choice(possible_shifts)
                             violation_found = True
                             break
@@ -1005,14 +1063,11 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
             possible_shifts = [x for x in range(number_shifts) if x != old_shift]
             if possible_shifts:
                 new_roster[n][d] = random.choice(possible_shifts)
-        # (return new_roster will follow)
 
     else:
         # simple change-coverage move
         ...
     return new_roster
-
-
 
 def simulated_annealing(initial_roster,
                         T_start=1000.0,
