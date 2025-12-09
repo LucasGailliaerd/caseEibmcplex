@@ -324,6 +324,17 @@ def read_cyclic_roster():
       NurseType: 1,2,... -> stored as 0,1,...
       Day*: shift codes in internal encoding (0..4)
     """
+
+    # Mapping van Excel naar interne shiftcode
+    EXCEL_TO_INTERNAL_SHIFT = {
+        0: 4,  # Free
+        1: 0,  # Early
+        2: 1,  # Day
+        3: 2,  # Late
+        4: 3   # Night
+    }
+
+
     global number_nurses, number_days, cyclic_roster, nurse_type
 
     sheet_name = f"Case_D_Cyclic_{department}"
@@ -357,8 +368,11 @@ def read_cyclic_roster():
         nt_val = int(df.iloc[k]["NurseType"])
         nurse_type[k] = nt_val - 1
         for d_idx, col in enumerate(day_cols):
-            code = int(df.iloc[k][col])      # 0..4
-            cyclic_roster[k][d_idx] = code
+            excel_code = int(df.iloc[k][col])
+            if excel_code not in EXCEL_TO_INTERNAL_SHIFT:
+                raise ValueError(f"Unknown shift code {excel_code} in row {k+1}, column {col}")
+            cyclic_roster[k][d_idx] = EXCEL_TO_INTERNAL_SHIFT[excel_code]
+
 
 def read_monthly_roster_constraints():
     """
@@ -482,42 +496,26 @@ def read_monthly_roster_constraints():
             min_shift[k][sh] = base_min_shift[sh]
             max_shift[k][sh] = base_max_shift[sh]
 
-    for sh in range(num_working_shifts, SHIFTS):
+        for sh in range(num_working_shifts, SHIFTS):
 
     # If this is the FREE shift (code 4), we don't care about consecutive days
-        if sh == 4:
-            min_cons[k][sh] = 0
-            max_cons[k][sh] = 9999   # any length is fine
-        else:
-            # Real shift (e.g. Night) but not explicitly in the Excel block:
-            # give it a very large max so it almost never violates
-            min_cons[k][sh] = 0
-            max_cons[k][sh] = 28     # or base_max_cons_wrk, or similar
+            if sh == 4:
+                min_cons[k][sh] = 0
+                max_cons[k][sh] = 9999   # any length is fine
+            else:
+                # Real shift (e.g. Night) but not explicitly in the Excel block:
+                # give it a very large max so it almost never violates
+                min_cons[k][sh] = 0
+                max_cons[k][sh] = 28     # or base_max_cons_wrk, or similar
 
-        extreme_max_cons[k][sh] = 10
-        extreme_min_cons[k][sh] = 1
-        min_shift[k][sh] = 0
-        max_shift[k][sh] = 9999
+            extreme_max_cons[k][sh] = 10
+            extreme_min_cons[k][sh] = 1
+            min_shift[k][sh] = 0
+            max_shift[k][sh] = 9999
 
 
-    identical[k] = ident_flag
+        identical[k] = ident_flag
 
-def print_monthly_roster_constraints():
-    print("=== Monthly Roster Constraints Per Nurse ===")
-    for k in range(number_nurses):
-        print(f"\nNurse {k+1} — Employment %: {nurse_percent_employment[k]:.2f}")
-        print(f"  Assignment Limits: min = {min_ass[k]}, max = {max_ass[k]}")
-        print(f"  Consecutive Working Days: min = {min_cons_wrk[k]}, max = {max_cons_wrk[k]}")
-        print("  Consecutive Shifts Per Type:")
-        for s in range(SHIFTS):
-            label = SHIFT_LABELS.get(s, f"Shift{s}")
-            print(f"    {label}: min = {min_cons[k][s]}, max = {max_cons[k][s]} (extreme max = {extreme_max_cons[k][s]})")
-        print("  Shift Type Assignment Limits:")
-        for s in range(SHIFTS):
-            label = SHIFT_LABELS.get(s, f"Shift{s}")
-            print(f"    {label}: min = {min_shift[k][s]}, max = {max_shift[k][s]}")
-        print(f"  Identical Weekend Constraint: {'YES' if identical[k] else 'NO'}")
-    print("\n==========================================================")
 
 
 def read_monthly_roster_from_excel():
@@ -528,6 +526,16 @@ def read_monthly_roster_from_excel():
       columns: Personnel Number (optional), Day1..DayN
       Day*: shift codes (0..4)
     """
+    # Mapping Excel → interne shiftcode
+    EXCEL_TO_INTERNAL_SHIFT = {
+        0: 4,  # Free
+        1: 0,  # Early
+        2: 1,  # Day
+        3: 2,  # Late
+        4: 3   # Night
+    }
+
+
     global monthly_roster, number_nurses, number_days
 
     sheet_name = f"Case_E_MonthlyRoster_{department}"
@@ -567,8 +575,42 @@ def read_monthly_roster_from_excel():
 
     for k in range(number_nurses):
         for d_idx, col in enumerate(day_cols):
-            code = int(df.iloc[k][col])        # 0..4
-            monthly_roster[k][d_idx] = code
+            excel_code = int(df.iloc[k][col])
+            if excel_code not in EXCEL_TO_INTERNAL_SHIFT:
+                raise ValueError(f"Unknown shift code {excel_code} for nurse {k+1}, day {d_idx+1}")
+            monthly_roster[k][d_idx] = EXCEL_TO_INTERNAL_SHIFT[excel_code]
+
+def debug_print_first_nurse():
+    print("\n=== QUICK CHECK: FIRST NURSE DATA ===")
+
+    # ID & FTE
+    print(f"Personnel Number: {personnel_number[0]}")
+    print(f"Employment %: {nurse_percent_employment[0]:.2f}")
+    print(f"Type: {nurse_type[0]+1}")  # +1 to match Excel (1/2)
+
+    # Preferences
+    print("Preferences (Day 0):")
+    for s in range(SHIFTS):
+        label = SHIFT_LABELS.get(s, f"Shift{s}")
+        print(f"  {label}: {pref[0][0][s]}")
+
+    # Assignment constraints
+    print(f"Assignment Min: {min_ass[0]}, Max: {max_ass[0]}")
+    print(f"Consecutive Working Days: min = {min_cons_wrk[0]}, max = {max_cons_wrk[0]}")
+
+    print("Consecutive Shifts Per Type:")
+    for s in range(SHIFTS):
+        label = SHIFT_LABELS.get(s, f"Shift{s}")
+        print(f"  {label}: min = {min_cons[0][s]}, max = {max_cons[0][s]}")
+
+    print("Assignment Limits Per Shift:")
+    for s in range(SHIFTS):
+        label = SHIFT_LABELS.get(s, f"Shift{s}")
+        print(f"  {label}: min = {min_shift[0][s]}, max = {max_shift[0][s]}")
+
+    print(f"Identical Weekend Constraint: {'YES' if identical[0] else 'NO'}")
+
+    print("======================================\n")
 
 def debug_capacity_vs_demand():
     total_required = 0
@@ -578,7 +620,6 @@ def debug_capacity_vs_demand():
 
     total_max_assign = sum(max_ass)
     total_min_assign = sum(min_ass)
-    print_monthly_roster_constraints()
     print("Total required assignments:", total_required)
     print("Total min assignments:", total_min_assign)
     print("Total max assignments:", total_max_assign)
@@ -613,8 +654,6 @@ def read_input():
         min_ass[n] = max(min_ass[n], contract_min)
     
     number_shifts = SHIFTS
-
-
 
 
 def print_output():
@@ -1005,7 +1044,7 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
     if number_nurses < 1 or number_days < 1:
         return new_roster
 
-    # 1️⃣ Eerst: probeer een te lang werkblok te breken
+    #  Eerst: probeer een te lang werkblok te breken
     for n in random.sample(range(number_nurses), k=number_nurses):
         block = find_long_workblock(new_roster, n)
         if block is not None:
@@ -1015,7 +1054,7 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
             new_roster[n][d] = 4  # 4 = Free
             return new_roster
 
-    # 2️⃣ Pas als er geen illegale werkblokken zijn: je oude moves
+    #  Pas als er geen illegale werkblokken zijn: je oude moves
     r = random.random()
 
     if r < p_swap:
@@ -1173,6 +1212,7 @@ def add_nurse_to_day_shift(nurse_id: int, day_id: int, shift_id: int):
     monthly_roster[nurse_id][day_id] = shift_id
 
 
+
 def main():
     global number_days, weekend, department, elapsed_time
 
@@ -1186,6 +1226,7 @@ def main():
     debug_list_sheets()
     read_input()
     debug_capacity_vs_demand()
+    debug_print_first_nurse()
 
     start_time = time.perf_counter()
     procedure()
