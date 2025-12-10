@@ -131,6 +131,15 @@ violations = [0 for _ in range(DAYS * SHIFTS)]
 
 # Generic helpers
 
+INTERNAL_TO_EXTERNAL_SHIFT = {
+    0: 1,  # Early
+    1: 2,  # Day
+    2: 3,  # Late
+    3: 4,  # Night
+    4: 0   # Free
+}
+
+
 def _find_cell_containing(df, text):
     """ Return (row, col) of the first cell whose string contains 'text' (case-insensitive). """
     target = text.upper()
@@ -666,8 +675,9 @@ def print_output():
         for k in range(number_nurses):
             f.write(f"{personnel_number[k]}\t")
             for i in range(number_days):
-                code = monthly_roster[k][i]
-                f.write(f"{code}\t")
+                internal_code = monthly_roster[k][i]
+                external_code = INTERNAL_TO_EXTERNAL_SHIFT[internal_code]
+                f.write(f"{external_code}\t")
             f.write("\n")
     print(f"Monthly roster written to {txt_filename}")
 
@@ -676,8 +686,9 @@ def print_output():
         colname = f"Day{d + 1}"
         col = []
         for k in range(number_nurses):
-            code = monthly_roster[k][d]
-            col.append(code)
+            internal_code = monthly_roster[k][d]
+            external_code = INTERNAL_TO_EXTERNAL_SHIFT[internal_code]
+            col.append(external_code)
         data[colname] = col
 
     return pd.DataFrame(data)
@@ -1117,12 +1128,14 @@ def simulated_annealing(initial_roster,
                         T_start=1000.0,
                         T_min=1e-3,
                         alpha=0.95,
-                        iters_per_T=1000):
+                        iters_per_T=10000):
     current = deepcopy(initial_roster)
     best = deepcopy(initial_roster)
     current_cost = compute_objective(current)
     best_cost = current_cost
     T = T_start
+
+    
 
     while T > T_min:
         for _ in range(iters_per_T):
@@ -1234,8 +1247,9 @@ def main():
     weekend = 7
     department = "A"
 
-    seed = 1000
+    seed = int(time.time())
     random.seed(seed)
+    print(f"Using random seed: {seed}")
 
     debug_list_sheets()
     read_input()
