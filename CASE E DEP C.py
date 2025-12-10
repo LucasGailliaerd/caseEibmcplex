@@ -48,7 +48,7 @@ W_UNDER  = 5000   # penalty per nurse missing (understaffing)
 W_OVER   = 500   # penalty per nurse extra (overstaffing)
 W_ASSIGN = 10000    # penalty per shifts beyond min/max total assignments
 W_CONS   = 20000    # penalty for violating consecutive-day limits
-
+W_FORBID = 100000  #penalty for scheduling when requirement is zero
 # Wage parameters (€/shift), indexed as [nurse_type][shift_code 0..3]
 # nurse_type: 0 = type 1 nurse, 1 = type 2 nurse
 WAGE_WEEKDAY = {
@@ -201,7 +201,7 @@ def find_long_workblock(roster, n: int):
 
 # Input reading
 def read_shift_system():
-    """ Read the shift system for department C from the 'Case_C_9' sheet.
+    """ Read the shift system for department A from the 'Case_C_9' sheet.
     Internal encoding:
       0 = Early (E)   3 <= start < 9
       1 = Day   (D)   9 <= start < 12
@@ -912,15 +912,25 @@ def compute_components(roster):
                 patient_cost += SHIFT_CHANGE_PEN
 
     for d in range(number_days):
-        for s in range(number_shifts - 1):
+        for s in range(number_shifts - 1):  # ignore F
             scheduled_count = sum(roster[n][d] == s for n in range(number_nurses))
-            diff = scheduled_count - req[d][s]
+            required = req[d][s]
+
+            # 1) Als requirement = 0, wil je ECHT niemand ingepland
+            if required == 0 and scheduled_count > 0:
+                # zware straf per onnodig ingeplande nurse
+                patient_cost += W_FORBID * scheduled_count
+                continue  # rest overslaan, want dit is al fout genoeg
+
+            # 2) Normale under/overstaffing logica
+            diff = scheduled_count - required
             if diff < 0:
                 shortage = -diff
                 patient_cost += W_UNDER * (shortage ** 2)
             elif diff > 0:
                 surplus = diff
                 patient_cost += W_OVER * (surplus ** 2)
+
 
 
     # 3) Nurse satisfaction (as cost)
@@ -1075,9 +1085,11 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
                             # Found a violation: break the block
                             change_day = random.randint(start, start + cons - 1)
                             # Change the shift on change_day to something else (preferably a non-violating option)
-                            possible_shifts = [x for x in range(number_shifts) if x != s]
+                            possible_shifts = [x for x in range(SHIFTS) if x != s and (req[change_day][x] > 0 or x == FREE_SHIFT)]
                             if possible_shifts:
-                                new_roster[n][change_day] = random.choice(possible_shifts)
+                                # Prioritize understaffed shifts
+                                understaffed = [x for x in possible_shifts if sum(new_roster[nn][change_day] == x for nn in range(number_nurses)) < req[change_day][x]]
+                                new_roster[n][change_day] = random.choice(understaffed or possible_shifts)
                             violation_found = True
                             break
                         cons = 0
@@ -1091,10 +1103,11 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
             n = random.randrange(number_nurses)
             d = random.randrange(number_days)
             old_shift = new_roster[n][d]
-            possible_shifts = [x for x in range(number_shifts) if x != old_shift]
+            possible_shifts = [x for x in range(SHIFTS) if x != old_shift and (req[d][x] > 0 or x == FREE_SHIFT)]
             if possible_shifts:
-                new_roster[n][d] = random.choice(possible_shifts)
-
+                # Prioritize shifts that are understaffed
+                understaffed = [x for x in possible_shifts if sum(new_roster[nn][d] == x for nn in range(number_nurses)) < req[d][x]]
+                new_roster[n][d] = random.choice(understaffed or possible_shifts)
     else:
         # simple change-coverage move
         ...

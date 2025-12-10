@@ -1085,9 +1085,11 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
                             # Found a violation: break the block
                             change_day = random.randint(start, start + cons - 1)
                             # Change the shift on change_day to something else (preferably a non-violating option)
-                            possible_shifts = [x for x in range(number_shifts) if x != s]
+                            possible_shifts = [x for x in range(SHIFTS) if x != s and (req[change_day][x] > 0 or x == FREE_SHIFT)]
                             if possible_shifts:
-                                new_roster[n][change_day] = random.choice(possible_shifts)
+                                # Prioritize understaffed shifts
+                                understaffed = [x for x in possible_shifts if sum(new_roster[nn][change_day] == x for nn in range(number_nurses)) < req[change_day][x]]
+                                new_roster[n][change_day] = random.choice(understaffed or possible_shifts)
                             violation_found = True
                             break
                         cons = 0
@@ -1101,10 +1103,11 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
             n = random.randrange(number_nurses)
             d = random.randrange(number_days)
             old_shift = new_roster[n][d]
-            possible_shifts = [x for x in range(number_shifts) if x != old_shift]
+            possible_shifts = [x for x in range(SHIFTS) if x != old_shift and (req[d][x] > 0 or x == FREE_SHIFT)]
             if possible_shifts:
-                new_roster[n][d] = random.choice(possible_shifts)
-
+                # Prioritize shifts that are understaffed
+                understaffed = [x for x in possible_shifts if sum(new_roster[nn][d] == x for nn in range(number_nurses)) < req[d][x]]
+                new_roster[n][d] = random.choice(understaffed or possible_shifts)
     else:
         # simple change-coverage move
         ...
