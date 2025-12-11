@@ -31,12 +31,20 @@ WAGE_WEEKEND = {
 }
 
 # ========== OBJECTIVE WEIGHTS ==========
-W_PREF = 20
-W_UNDER = 5000
-W_OVER = 500
-W_ASSIGN = 10000
-W_CONS = 20000
+W_UNDER = 10000
+W_OVER = 2000
+W_ASSIGN = 2000
+W_CONS = 1000
 W_FORBID = 100000
+W_MIN_ASSIGN = 8000  # or same order as W_ASSIGN
+
+
+PREF_PEN = 20
+LATE_EARLY_PEN = 1
+NIGHT_REST_PEN = 1
+CONTRACT_MIN_PEN = 0
+CONS_WORK_PEN = 1
+SHIFT_CHANGE_PEN = 5
 
 WEIGHT_WAGE = 1
 WEIGHT_NURSE = 1
@@ -757,8 +765,6 @@ def compute_components(roster):
     nurse_cost = 0.0
     patient_cost = 0.0
 
-    PREF_PEN = 1
-    SHIFT_CHANGE_PEN = 1.0
 
     # wage + part of patient cost (shift changes)
     for n in range(number_nurses):
@@ -808,10 +814,6 @@ def compute_components(roster):
     LATE_SHIFT = 3
     NIGHT_SHIFT = 4
 
-    LATE_EARLY_PEN = 1
-    NIGHT_REST_PEN = 1
-    CONTRACT_MIN_PEN = 1
-    CONS_WORK_PEN = 1
 
     for n in range(number_nurses):
         works_anything = any(roster[n][d] != FREE_SHIFT for d in range(number_days))
@@ -844,10 +846,16 @@ def compute_components(roster):
         emp = nurse_percent_employment[n]
 
         min_contract_shifts = 20 if emp >= 0.99 else 15
+
+        # 1) Contractual minimum (hardish)
         if worked < min_contract_shifts:
-            nurse_cost += CONTRACT_MIN_PEN * (min_contract_shifts - worked)
+            nurse_cost += W_MIN_ASSIGN * (min_contract_shifts - worked)
+
+        # 2) Problem-specific min_ass (often same or similar)
         if worked < min_ass[n]:
-            nurse_cost += CONTRACT_MIN_PEN * (min_ass[n] - worked)
+            nurse_cost += W_MIN_ASSIGN * (min_ass[n] - worked)
+
+        # 3) Over max assignments
         if worked > max_ass[n]:
             nurse_cost += W_ASSIGN * (worked - max_ass[n])
 
@@ -981,10 +989,10 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
 
 
 def simulated_annealing(initial_roster,
-                        T_start=100,
+                        T_start=1000,
                         T_min=1,
                         alpha=0.95,
-                        iters_per_T=40,
+                        iters_per_T=2,
                         max_seconds = None):
     current = deepcopy(initial_roster)
     best = deepcopy(initial_roster)
@@ -1002,22 +1010,9 @@ def simulated_annealing(initial_roster,
                     print(f"Time limit of {max_seconds} s reached, stopping SA.")
                     return best, best_cost
                 
-            attempts = 0
-            neighbor = None
-            while attempts < 30:
-                candidate = random_neighbor(current)
-                if violates_contract_min(candidate):
-                    attempts += 1
-                    continue
-                # Don’t block on consecutive violations here – let cost handle it
-                neighbor = candidate
-                break
-
-
-            if neighbor is None:
-                continue
-
+            neighbor = random_neighbor(current)
             neighbor_cost = compute_objective(neighbor)
+
             delta = neighbor_cost - current_cost
 
             if delta < 0:
@@ -1075,10 +1070,10 @@ def procedure():
 
     best_roster, best_obj = simulated_annealing(
         initial_roster,
-        T_start=1000.0,
+        T_start=1000,
         T_min=1e-3,
         alpha=0.95,
-        iters_per_T=200,
+        iters_per_T=2,
         max_seconds=300
     )
 

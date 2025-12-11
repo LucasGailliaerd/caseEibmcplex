@@ -1,49 +1,42 @@
-The total preference score is 23813.
+The total preference score is 23136.
 The constraint 'maximum number of consecutive working days' is violated 0 times.
 The constraint 'maximum number of consecutive working days per shift type' is violated 0 times.
-The constraint 'minimum number of assignments' is violated 0 times.
-The constraint 'maximum number of assignments' is violated 2 times.
+The constraint 'minimum number of assignments' is violated 1 times.
+The constraint 'maximum number of assignments' is violated 0 times.
 
 The staffing requirements are violated as follows:
 There are too many nurses in shift 1 on day 1: 9 > 8.
-There are too many nurses in shift 4 on day 1: 5 > 4.
+There are too many nurses in shift 4 on day 1: 6 > 4.
 There are too few nurses in shift 4 on day 2: 3 < 4.
-There are too many nurses in shift 1 on day 3: 12 > 8.
+There are too many nurses in shift 1 on day 3: 11 > 8.
+There are too many nurses in shift 3 on day 3: 8 > 7.
 There are too many nurses in shift 4 on day 3: 6 > 4.
-There are too many nurses in shift 1 on day 4: 12 > 8.
+There are too many nurses in shift 1 on day 4: 10 > 8.
 There are too many nurses in shift 2 on day 4: 1 > 0.
 There are too many nurses in shift 4 on day 4: 5 > 4.
-There are too many nurses in shift 3 on day 6: 8 > 7.
+There are too many nurses in shift 4 on day 7: 5 > 4.
 There are too many nurses in shift 1 on day 8: 9 > 8.
-There are too few nurses in shift 3 on day 8: 6 < 7.
 There are too many nurses in shift 4 on day 8: 5 > 4.
-There are too few nurses in shift 4 on day 9: 3 < 4.
-There are too many nurses in shift 1 on day 10: 12 > 8.
-There are too many nurses in shift 3 on day 10: 8 > 7.
-There are too many nurses in shift 4 on day 10: 6 > 4.
-There are too many nurses in shift 1 on day 11: 12 > 8.
+There are too many nurses in shift 1 on day 10: 11 > 8.
+There are too many nurses in shift 4 on day 10: 5 > 4.
+There are too many nurses in shift 1 on day 11: 10 > 8.
 There are too many nurses in shift 2 on day 11: 1 > 0.
-There are too many nurses in shift 4 on day 11: 5 > 4.
-There are too many nurses in shift 3 on day 13: 8 > 7.
-There are too few nurses in shift 3 on day 14: 6 < 7.
+There are too many nurses in shift 3 on day 11: 8 > 7.
+There are too many nurses in shift 1 on day 13: 9 > 8.
+There are too many nurses in shift 3 on day 14: 9 > 7.
+There are too many nurses in shift 4 on day 14: 5 > 4.
 There are too many nurses in shift 1 on day 15: 9 > 8.
 There are too many nurses in shift 4 on day 15: 5 > 4.
-There are too few nurses in shift 3 on day 16: 6 < 7.
-There are too few nurses in shift 4 on day 16: 3 < 4.
-There are too many nurses in shift 1 on day 17: 12 > 8.
-There are too many nurses in shift 3 on day 17: 8 > 7.
-There are too many nurses in shift 4 on day 17: 7 > 4.
-There are too many nurses in shift 1 on day 18: 12 > 8.
+There are too few nurses in shift 1 on day 16: 7 < 8.
+There are too many nurses in shift 1 on day 17: 11 > 8.
+There are too many nurses in shift 4 on day 17: 6 > 4.
+There are too many nurses in shift 1 on day 18: 10 > 8.
 There are too many nurses in shift 2 on day 18: 1 > 0.
 There are too many nurses in shift 4 on day 18: 5 > 4.
-There are too many nurses in shift 3 on day 20: 8 > 7.
 There are too many nurses in shift 1 on day 22: 9 > 8.
-There are too many nurses in shift 4 on day 22: 5 > 4.
-There are too few nurses in shift 4 on day 23: 3 < 4.
-There are too many nurses in shift 1 on day 24: 12 > 8.
-There are too many nurses in shift 3 on day 24: 8 > 7.
+There are too many nurses in shift 1 on day 24: 10 > 8.
 There are too many nurses in shift 4 on day 24: 5 > 4.
-There are too many nurses in shift 1 on day 25: 12 > 8.
+There are too many nurses in shift 1 on day 25: 10 > 8.
 There are too many nurses in shift 2 on day 25: 1 > 0.
-There are too many nurses in shift 4 on day 25: 5 > 4.
-There are too many nurses in shift 3 on day 27: 8 > 7.
+There are too many nurses in shift 4 on day 25: 6 > 4.
+There are too few nurses in shift 1 on day 26: 7 < 8.
