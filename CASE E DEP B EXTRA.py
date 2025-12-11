@@ -10,7 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent
 EXCEL_FILE = BASE_DIR / "CASE_E_input.xlsx"
 
 # ========== PROBLEM DIMENSIONS ==========
-NURSES = 32
+NURSES = 31
 DAYS = 28
 SHIFTS = 5
 TYPES = 2
@@ -167,7 +167,7 @@ def detect_number_nurses_from_monthly_roster():
     """
     global number_nurses
 
-    sheet_name = f"Case_E_MonthlyRoster_{department}"
+    sheet_name = f"Case_E_MonthlyRoster_{department}_EXTRA"
     df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
 
     if "Personnel Number" in df.columns:
@@ -209,8 +209,8 @@ def read_shift_system():
     number_shifts = int(df.iat[1, 0])  # number of working shifts (probably 4)
     length = int(df.iat[1, 1])
 
-    r_start, c_start = _find_cell_containing(df, "START SHIFTS DEP A")
-    r_req, c_req = _find_cell_containing(df, "REQUIREMENTS DEP A")
+    r_start, c_start = _find_cell_containing(df, "START SHIFTS DEP B")
+    r_req, c_req = _find_cell_containing(df, "REQUIREMENTS DEP B")
 
     start_rows = [r_start + 1 + i for i in range(number_shifts)]
     req_rows = [r_req + 1 + i for i in range(number_shifts)]
@@ -256,7 +256,7 @@ def read_shift_system():
 
 def read_personnel_characteristics():
     global number_nurses, number_types
-    sheet_name = f"Case_E_Preferences_{department}"
+    sheet_name = f"Case_E_Preferences_{department}_EXTRA"
     df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name, header=None)
     n_prefs = len(df)
 
@@ -313,7 +313,7 @@ def read_personnel_characteristics():
 def read_cyclic_roster():
     global number_nurses, number_days
 
-    sheet_name = f"Case_D_Cyclic_{department}"
+    sheet_name = f"Case_D_Cyclic_{department}_EXTRA"
     df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
 
     n_cyc = len(df)
@@ -476,7 +476,7 @@ def read_monthly_roster_constraints():
 def read_monthly_roster_from_excel():
     global number_days, number_nurses
 
-    sheet_name = f"Case_E_MonthlyRoster_{department}"
+    sheet_name = f"Case_E_MonthlyRoster_{department}_EXTRA"
     df = pd.read_excel(EXCEL_FILE, sheet_name=sheet_name)
 
     # Recompute nurse count from personnel numbers
@@ -588,7 +588,7 @@ def read_input():
 # ========== OUTPUT WRITER ==========
 
 def print_output():
-    txt_filename = f"Monthly_Roster_dpt_{department}.txt"
+    txt_filename = f"Monthly_Roster_dpt_{department}_EXTRA.txt"
     with open(txt_filename, "w") as f:
         for k in range(number_nurses):
             f.write(f"{personnel_number[k]}\t")
@@ -668,7 +668,7 @@ def evaluate_solution():
     for nurse_idx in range(number_nurses):
         evaluate_line_of_work(nurse_idx)
 
-    txt_filename = BASE_DIR / f"Violations_dpt_{department}.txt"
+    txt_filename = BASE_DIR / f"Violations_dpt_{department}_EXTRA.txt"
     with open(txt_filename, "w") as f:
         f.write(f"The total preference score is {violations[0]}.\n")
         f.write(
@@ -1099,7 +1099,7 @@ def main():
 
     number_days = 28
     weekend = 7
-    department = "A"
+    department = "B"
 
     seed = 42
     random.seed(seed)
@@ -1118,7 +1118,7 @@ def main():
     df_roster = print_output()
     df_summary, df_staffing = evaluate_solution()
 
-    output_file = BASE_DIR / f"CASE_E_output_{department}.xlsx"
+    output_file = BASE_DIR / f"CASE_E_output_{department}_EXTRA.xlsx"
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         df_roster.to_excel(writer, sheet_name="MonthlyRoster", index=False)
         df_summary.to_excel(writer, sheet_name="Summary", index=False)
