@@ -981,18 +981,27 @@ def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
 
 
 def simulated_annealing(initial_roster,
-                        T_start=1000.0,
-                        T_min=1e-3,
+                        T_start=100,
+                        T_min=1,
                         alpha=0.95,
-                        iters_per_T=1000):
+                        iters_per_T=40,
+                        max_seconds = None):
     current = deepcopy(initial_roster)
     best = deepcopy(initial_roster)
     current_cost = compute_objective(current)
     best_cost = current_cost
     T = T_start
 
+    start_time = time.perf_counter()
+
     while T > T_min:
         for _ in range(iters_per_T):
+            if max_seconds is not None:
+                elapsed = time.perf_counter() - start_time
+                if elapsed >= max_seconds:
+                    print(f"Time limit of {max_seconds} s reached, stopping SA.")
+                    return best, best_cost
+                
             attempts = 0
             neighbor = None
             while attempts < 30:
@@ -1010,15 +1019,6 @@ def simulated_annealing(initial_roster,
 
             neighbor_cost = compute_objective(neighbor)
             delta = neighbor_cost - current_cost
-
-            # Optional staffing guard
-            curr_staff = staffing_violation_score(current)
-            cand_staff = staffing_violation_score(neighbor)
-            if cand_staff > curr_staff:
-                # reject moves that worsen coverage
-                continue
-
-
 
             if delta < 0:
                 current, current_cost = neighbor, neighbor_cost
@@ -1078,7 +1078,8 @@ def procedure():
         T_start=1000.0,
         T_min=1e-3,
         alpha=0.95,
-        iters_per_T=200
+        iters_per_T=200,
+        max_seconds=300
     )
 
     w1, n1, p1 = compute_components(best_roster)
@@ -1096,6 +1097,7 @@ def procedure():
     print(monthly_roster[0][:7])
     print("First nurse, first 7 days (labels):")
     print([SHIFT_LABELS[c] for c in monthly_roster[0][:7]])
+
 
 
 def main():
