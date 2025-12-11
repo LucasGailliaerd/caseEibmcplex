@@ -1105,7 +1105,7 @@ def main():
     weekend = 7
     department = "A"
 
-    seed = int(time.time())
+    seed = 42
     random.seed(seed)
     print(f"Using random seed: {seed}")
 

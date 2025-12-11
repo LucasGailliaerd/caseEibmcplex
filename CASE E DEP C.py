@@ -574,7 +574,7 @@ def read_input():
     read_monthly_roster_constraints()
     print("DEBUG nurse 1, day 1 prefs (F,E,D,L,N):")
     print([pref[0][0][s] for s in range(SHIFTS)])
-
+    
     number_shifts = SHIFTS
 
 # ========== OUTPUT WRITER ==========
@@ -876,6 +876,19 @@ def violates_contract_min(roster) -> bool:
     return False
 
 # ========== NEIGHBOR / SA ==========
+def staffing_violation_score(roster):
+    score = 0
+    working_shifts = [s for s in range(number_shifts) if s != FREE_SHIFT]
+    for d in range(number_days):
+        for s in working_shifts:
+            scheduled_count = sum(roster[n][d] == s for n in range(number_nurses))
+            required = req[d][s]
+            if required == 0 and scheduled_count > 0:
+                score += scheduled_count  # forbidden shifts
+            else:
+                diff = scheduled_count - required
+                score += abs(diff)
+    return score
 
 def random_neighbor(roster, p_swap=0.4, p_fix_block=0.3):
     new_roster = deepcopy(roster)
@@ -987,19 +1000,25 @@ def simulated_annealing(initial_roster,
                 if violates_contract_min(candidate):
                     attempts += 1
                     continue
-                curr_viol = count_consecutive_shifttype_violations(current)
-                cand_viol = count_consecutive_shifttype_violations(candidate)
-                if cand_viol > curr_viol:
-                    attempts += 1
-                    continue
+                # Don’t block on consecutive violations here – let cost handle it
                 neighbor = candidate
                 break
+
 
             if neighbor is None:
                 continue
 
             neighbor_cost = compute_objective(neighbor)
             delta = neighbor_cost - current_cost
+
+            # Optional staffing guard
+            curr_staff = staffing_violation_score(current)
+            cand_staff = staffing_violation_score(neighbor)
+            if cand_staff > curr_staff:
+                # reject moves that worsen coverage
+                continue
+
+
 
             if delta < 0:
                 current, current_cost = neighbor, neighbor_cost
@@ -1034,6 +1053,17 @@ def procedure():
         [monthly_roster[n][d] for d in range(number_days)]
         for n in range(number_nurses)
     ]
+
+    print("\n=== DEBUG: Staffing Day 1 BEFORE SA ===")
+    print("Req per shift (day 1):")
+    for s in range(SHIFTS):
+        print(s, SHIFT_LABELS[s], "req =", req[0][s])
+
+    print("\nScheduled per shift (day 1) BEFORE SA:")
+    for s in range(SHIFTS):
+        scheduled = sum(initial_roster[n][0] == s for n in range(number_nurses))
+        print(s, SHIFT_LABELS[s], "scheduled =", scheduled)
+    print("======================================\n")
 
     w0, n0, p0 = compute_components(initial_roster)
     obj0 = compute_objective(initial_roster)
@@ -1075,7 +1105,7 @@ def main():
     weekend = 7
     department = "C"
 
-    seed = int(time.time())
+    seed = 42
     random.seed(seed)
     print(f"Using random seed: {seed}")
 
