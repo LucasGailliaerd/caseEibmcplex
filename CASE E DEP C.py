@@ -10,7 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent
 EXCEL_FILE = BASE_DIR / "CASE_E_input.xlsx"
 
 # ========== PROBLEM DIMENSIONS ==========
-NURSES = 32
+NURSES = 33
 DAYS = 28
 SHIFTS = 5
 TYPES = 2
@@ -575,18 +575,6 @@ def read_input():
     print("DEBUG nurse 1, day 1 prefs (F,E,D,L,N):")
     print([pref[0][0][s] for s in range(SHIFTS)])
 
-
-    # enforce contract-based minimum assignments
-    for n in range(number_nurses):
-        emp = nurse_percent_employment[n]
-        if emp >= 0.99:
-            contract_min = 20
-        elif emp >= 0.74:
-            contract_min = 15
-        else:
-            contract_min = 10
-        min_ass[n] = max(min_ass[n], contract_min)
-
     number_shifts = SHIFTS
 
 # ========== OUTPUT WRITER ==========
@@ -983,7 +971,7 @@ def simulated_annealing(initial_roster,
                         T_start=1000.0,
                         T_min=1e-3,
                         alpha=0.95,
-                        iters_per_T=10000):
+                        iters_per_T=1000):
     current = deepcopy(initial_roster)
     best = deepcopy(initial_roster)
     current_cost = compute_objective(current)

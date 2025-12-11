@@ -10,7 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent
 EXCEL_FILE = BASE_DIR / "CASE_E_input.xlsx"
 
 # ========== PROBLEM DIMENSIONS ==========
-NURSES = 32
+NURSES = 46
 DAYS = 28
 SHIFTS = 5
 TYPES = 2
@@ -983,7 +983,7 @@ def simulated_annealing(initial_roster,
                         T_start=1000.0,
                         T_min=1e-3,
                         alpha=0.95,
-                        iters_per_T=10000):
+                        iters_per_T=1000):
     current = deepcopy(initial_roster)
     best = deepcopy(initial_roster)
     current_cost = compute_objective(current)
